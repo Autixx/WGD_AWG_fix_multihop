@@ -473,7 +473,7 @@ class WireguardConfiguration:
                                     )
                             tmpList.append(Peer(tempPeer, self))
                 except Exception as e:
-                    current_app.logger.error(f"{self.Name} getPeers() Error", e)
+                    current_app.logger.error(f"{self.Name} getPeers() Error: {e}")
         else:
             with self.engine.connect() as conn:
                 existingPeers = conn.execute(self.peersTable.select()).mappings().fetchall()
@@ -550,9 +550,21 @@ class WireguardConfiguration:
                         "remote_endpoint": self.DashboardConfig.GetConfig("Peers", "remote_endpoint")[1],
                         "preshared_key": i["preshared_key"]
                     }
-                    conn.execute(
-                        self.peersTable.insert().values(newPeer)
-                    )
+                    existingPeer = conn.execute(
+                        self.peersTable.select().where(
+                            self.peersTable.c.id == i['id']
+                        )
+                    ).mappings().fetchone()
+                    if existingPeer is None:
+                        conn.execute(
+                            self.peersTable.insert().values(newPeer)
+                        )
+                    else:
+                        conn.execute(
+                            self.peersTable.update().values(newPeer).where(
+                                self.peersTable.c.id == i['id']
+                            )
+                        )
             for p in peers:
                 presharedKeyExist = len(p['preshared_key']) > 0
                 rd = random.Random()
@@ -577,7 +589,7 @@ class WireguardConfiguration:
                 "peers": list(map(lambda k : k['id'], peers))
             })
         except Exception as e:
-            current_app.logger.error("Add peers error", e)
+            current_app.logger.error(f"Add peers error: {e}")
             return False, [], str(e)
         return True, result['peers'], ""
 
@@ -768,9 +780,11 @@ class WireguardConfiguration:
     def getPeersTransfer(self):
         if not self.getStatus():
             self.toggleConfiguration()
-        # try:
-        data_usage = subprocess.check_output(f"{self.Protocol} show {self.Name} transfer",
-                                             shell=True, stderr=subprocess.STDOUT)
+        try:
+            data_usage = subprocess.check_output(f"{self.Protocol} show {self.Name} transfer",
+                                                 shell=True, stderr=subprocess.STDOUT)
+        except subprocess.CalledProcessError:
+            return "stopped"
         data_usage = data_usage.decode("UTF-8").split("\n")
         
         data_usage = [p.split("\t") for p in data_usage]
@@ -1084,7 +1098,7 @@ class WireguardConfiguration:
                         check = ipaddress.ip_network(ppip[0])
                         existedAddress.add(check)
                     except Exception as e:
-                        current_app.logger.error(f"{self.Name} peer {p.id} have invalid ip", e)
+                        current_app.logger.error(f"{self.Name} peer {p.id} have invalid ip: {e}")
         configurationAddresses = self.Address.split(',')
         for ca in configurationAddresses:
             ca = ca.strip()
@@ -1098,7 +1112,7 @@ class WireguardConfiguration:
                         if p.version == network.version and p.subnet_of(network):
                             availableAddress[ca] -= 1
             except Exception as e:
-                current_app.logger.error(f"Error: Failed to parse IP address {ca} from {self.Name}", e)
+                current_app.logger.error(f"Error: Failed to parse IP address {ca} from {self.Name}: {e}")
         return True, availableAddress
 
     def getAvailableIP(self, threshold = 255):
@@ -1115,7 +1129,7 @@ class WireguardConfiguration:
                         check = ipaddress.ip_network(ppip[0])
                         existedAddress.add(check.compressed)
                     except Exception as e:
-                        current_app.logger.error(f"{self.Name} peer {p.id} have invalid ip", e)
+                        current_app.logger.error(f"{self.Name} peer {p.id} have invalid ip: {e}")
         configurationAddresses = self.Address.split(',')
         for ca in configurationAddresses:
             ca = ca.strip()
@@ -1131,7 +1145,7 @@ class WireguardConfiguration:
                         availableAddress[ca] = list(islice(filter(lambda ip : ip not in existedAddress,
                                                                   map(lambda iph : ipaddress.ip_network(iph).compressed, network.hosts())), threshold))
             except Exception as e:
-                current_app.logger.error(f"Failed to parse IP address {ca} from {self.Name}", e)
+                current_app.logger.error(f"Failed to parse IP address {ca} from {self.Name}: {e}")
         return True, availableAddress
 
     def getRealtimeTrafficUsage(self):

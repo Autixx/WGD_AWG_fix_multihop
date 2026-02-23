@@ -249,7 +249,7 @@ class AmneziaWireguardConfiguration(WireguardConfiguration):
                                     )
                                 self.Peers.append(AmneziaWGPeer(tempPeer, self))
                 except Exception as e:
-                    current_app.logger.error(f"{self.Name} getPeers() Error", e)
+                    current_app.logger.error(f"{self.Name} getPeers() Error: {e}")
         else:
             with self.engine.connect() as conn:
                 existingPeers = conn.execute(self.peersTable.select()).mappings().fetchall()
@@ -286,9 +286,21 @@ class AmneziaWireguardConfiguration(WireguardConfiguration):
                         "preshared_key": i["preshared_key"],
                         "advanced_security": i['advanced_security']
                     }
-                    conn.execute(
-                        self.peersTable.insert().values(newPeer)
-                    )
+                    existingPeer = conn.execute(
+                        self.peersTable.select().where(
+                            self.peersTable.c.id == i['id']
+                        )
+                    ).mappings().fetchone()
+                    if existingPeer is None:
+                        conn.execute(
+                            self.peersTable.insert().values(newPeer)
+                        )
+                    else:
+                        conn.execute(
+                            self.peersTable.update().values(newPeer).where(
+                                self.peersTable.c.id == i['id']
+                            )
+                        )
             for p in peers:
                 presharedKeyExist = len(p['preshared_key']) > 0
                 rd = random.Random()
@@ -314,7 +326,7 @@ class AmneziaWireguardConfiguration(WireguardConfiguration):
                 "peers": list(map(lambda k : k['id'], peers))
             })
         except Exception as e:
-            current_app.logger.error("Add peers error", e)
+            current_app.logger.error(f"Add peers error: {e}")
             return False, [], str(e)
         return True, result['peers'], ""
 

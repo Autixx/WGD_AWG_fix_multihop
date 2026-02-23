@@ -99,7 +99,7 @@ def peerInformationBackgroundThread():
                                     c.logPeersHistoryEndpoint()
                             c.getRestrictedPeersList()
             except Exception as e:
-                app.logger.error(f"[WGDashboard] Background Thread #1 Error", e)
+                app.logger.error("[WGDashboard] Background Thread #1 Error: %s", e)
 
         if delay == 6:
             delay = 1
@@ -117,7 +117,7 @@ def peerJobScheduleBackgroundThread():
                 AllPeerJobs.runJob()
                 time.sleep(180)
             except Exception as e:
-                app.logger.error("Background Thread #2 Error", e)
+                app.logger.error("Background Thread #2 Error: %s", e)
 
 def gunicornConfig():
     _, app_ip = DashboardConfig.GetConfig("Server", "app_ip")
@@ -133,38 +133,63 @@ def ProtocolsEnabled() -> list[str]:
         protocols.append("wg")
     return protocols
 
+def DetectConfigurationProtocol(configPath: str, default: str = "wg") -> str:
+    awgKeys = {"Jc", "Jmin", "Jmax", "S1", "S2", "S3", "S4", "H1", "H2", "H3", "H4"}
+    try:
+        with open(configPath, "r") as f:
+            for raw in f:
+                line = raw.strip()
+                if line == "[Peer]":
+                    break
+                if len(line) == 0 or line == "[Interface]" or line.startswith("#") or line.startswith(";"):
+                    continue
+                split = re.split(r'\s*=\s*', line, 1)
+                if len(split) == 2 and split[0] in awgKeys:
+                    return "awg"
+    except Exception:
+        return default
+    return default
+
 def InitWireguardConfigurationsList(startup: bool = False):
     if os.path.exists(DashboardConfig.GetConfig("Server", "wg_conf_path")[1]):
-        confs = os.listdir(DashboardConfig.GetConfig("Server", "wg_conf_path")[1])
+        wgPath = DashboardConfig.GetConfig("Server", "wg_conf_path")[1]
+        confs = os.listdir(wgPath)
         confs.sort()
         for i in confs:
             if RegexMatch("^(.{1,}).(conf)$", i):
+                configPath = os.path.join(wgPath, i)
                 i = i.replace('.conf', '')
+                detectedProtocol = DetectConfigurationProtocol(configPath)
+                configClass = AmneziaWireguardConfiguration if detectedProtocol == "awg" else WireguardConfiguration
                 try:
                     if i in WireguardConfigurations.keys():
                         if WireguardConfigurations[i].configurationFileChanged():
                             with app.app_context():
-                                WireguardConfigurations[i] = WireguardConfiguration(DashboardConfig, AllPeerJobs, AllPeerShareLinks, DashboardWebHooks, i)
+                                WireguardConfigurations[i] = configClass(DashboardConfig, AllPeerJobs, AllPeerShareLinks, DashboardWebHooks, i)
                     else:
                         with app.app_context():
-                            WireguardConfigurations[i] = WireguardConfiguration(DashboardConfig, AllPeerJobs, AllPeerShareLinks, DashboardWebHooks, i, startup=startup)
+                            WireguardConfigurations[i] = configClass(DashboardConfig, AllPeerJobs, AllPeerShareLinks, DashboardWebHooks, i, startup=startup)
                 except WireguardConfiguration.InvalidConfigurationFileException as e:
                     app.logger.error(f"{i} have an invalid configuration file.")
 
     if "awg" in ProtocolsEnabled():
-        confs = os.listdir(DashboardConfig.GetConfig("Server", "awg_conf_path")[1])
+        awgPath = DashboardConfig.GetConfig("Server", "awg_conf_path")[1]
+        confs = os.listdir(awgPath)
         confs.sort()
         for i in confs:
             if RegexMatch("^(.{1,}).(conf)$", i):
+                configPath = os.path.join(awgPath, i)
                 i = i.replace('.conf', '')
+                detectedProtocol = DetectConfigurationProtocol(configPath, default="awg")
+                configClass = AmneziaWireguardConfiguration if detectedProtocol == "awg" else WireguardConfiguration
                 try:
                     if i in WireguardConfigurations.keys():
                         if WireguardConfigurations[i].configurationFileChanged():
                             with app.app_context():
-                                WireguardConfigurations[i] = AmneziaWireguardConfiguration(DashboardConfig, AllPeerJobs, AllPeerShareLinks, DashboardWebHooks, i)
+                                WireguardConfigurations[i] = configClass(DashboardConfig, AllPeerJobs, AllPeerShareLinks, DashboardWebHooks, i)
                     else:
                         with app.app_context():
-                            WireguardConfigurations[i] = AmneziaWireguardConfiguration(DashboardConfig, AllPeerJobs, AllPeerShareLinks, DashboardWebHooks, i, startup=startup)
+                            WireguardConfigurations[i] = configClass(DashboardConfig, AllPeerJobs, AllPeerShareLinks, DashboardWebHooks, i, startup=startup)
                 except WireguardConfiguration.InvalidConfigurationFileException as e:
                     app.logger.error(f"{i} have an invalid configuration file.")
 
@@ -970,9 +995,9 @@ def API_addPeers(configName):
                 )
                 return ResponseObject(status=status, message=message, data=addedPeers)
         except Exception as e:
-            app.logger.error("Add peers failed", e)
+            app.logger.error("Add peers failed: %s", e)
             return ResponseObject(False,
-                                  f"Add peers failed. Reason: {message}")
+                                  f"Add peers failed. Reason: {e}")
 
     return ResponseObject(False, "Configuration does not exist")
 
