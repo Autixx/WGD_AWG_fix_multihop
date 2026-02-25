@@ -1,4 +1,4 @@
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 class OverridePeerSettingsClass(BaseModel):
     DNS: str = ''
@@ -13,11 +13,24 @@ class PeerGroupsClass(BaseModel):
     Description: str = ''
     BackgroundColor: str = ''
     Icon: str = ''
-    Peers: list[str] = []
+    Peers: list[str] = Field(default_factory=list)
+
+class MultiHopConfigurationClass(BaseModel):
+    Enabled: bool = False
+    OutboundInterface: str = ''
+    OutboundGateway: str = ''
+    RoutedNetworks: str = '0.0.0.0/0'
+    ExcludedNetworks: str = ''
+    TableID: int | str = 51820
+    RulePriority: int | str = 10000
+    FirewallMark: int | str = 51820
+    EnableMasquerade: bool = True
+    AutoSetInterfaceTableOff: bool = True
 
 class WireguardConfigurationInfo(BaseModel):
     Description: str = ''
-    OverridePeerSettings: OverridePeerSettingsClass = OverridePeerSettingsClass(**{})
-    PeerGroups: dict[str, PeerGroupsClass] = {}
+    OverridePeerSettings: OverridePeerSettingsClass = Field(default_factory=OverridePeerSettingsClass)
+    PeerGroups: dict[str, PeerGroupsClass] = Field(default_factory=dict)
     PeerTrafficTracking: bool = True
     PeerHistoricalEndpointTracking: bool = True
+    MultiHop: MultiHopConfigurationClass = Field(default_factory=MultiHopConfigurationClass)

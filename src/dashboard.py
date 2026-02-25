@@ -484,6 +484,75 @@ def API_updateWireguardConfigurationInfo():
     
     return ResponseObject(status=status, message=msg, data=key)
 
+@app.get(f'{APP_PREFIX}/api/getWireguardConfigurationMultiHop')
+def API_getWireguardConfigurationMultiHop():
+    configurationName = request.args.get("configurationName")
+    if not configurationName or configurationName not in WireguardConfigurations.keys():
+        return ResponseObject(False, "Please provide a valid configuration name", status_code=404)
+
+    configuration = WireguardConfigurations[configurationName]
+    status, msg, preview = configuration.getMultiHopPreview()
+    if not status:
+        key = preview.get("Key") if type(preview) is dict else None
+        return ResponseObject(False, msg, key)
+    return ResponseObject(data={
+        "Settings": configuration.configurationInfo.MultiHop.model_dump(),
+        "Preview": preview
+    })
+
+@app.post(f'{APP_PREFIX}/api/updateWireguardConfigurationMultiHop')
+def API_updateWireguardConfigurationMultiHop():
+    data = request.get_json() or {}
+    name = data.get('Name')
+    value = data.get('Value')
+    applyConfiguration = StringToBoolean(str(data.get('Apply', False)))
+
+    if not name or value is None:
+        return ResponseObject(False, "Please provide configuration name and value")
+    if name not in WireguardConfigurations.keys():
+        return ResponseObject(False, "Configuration does not exist", status_code=404)
+
+    configuration = WireguardConfigurations[name]
+    status, msg, key = configuration.updateConfigurationInfo("MultiHop", value)
+    if not status:
+        return ResponseObject(False, msg, key)
+
+    if applyConfiguration:
+        status, msg, preview = configuration.applyMultiHopConfiguration()
+    else:
+        status, msg, preview = configuration.getMultiHopPreview()
+
+    if not status:
+        data = preview.get("Key") if type(preview) is dict and "Key" in preview.keys() else preview
+        return ResponseObject(False, msg, data)
+
+    return ResponseObject(data={
+        "Settings": configuration.configurationInfo.MultiHop.model_dump(),
+        "Preview": preview,
+        "Configuration": configuration
+    })
+
+@app.post(f'{APP_PREFIX}/api/applyWireguardConfigurationMultiHop')
+def API_applyWireguardConfigurationMultiHop():
+    data = request.get_json() or {}
+    name = data.get('Name')
+    if not name:
+        return ResponseObject(False, "Please provide configuration name")
+    if name not in WireguardConfigurations.keys():
+        return ResponseObject(False, "Configuration does not exist", status_code=404)
+
+    configuration = WireguardConfigurations[name]
+    status, msg, preview = configuration.applyMultiHopConfiguration()
+    if not status:
+        data = preview.get("Key") if type(preview) is dict and "Key" in preview.keys() else preview
+        return ResponseObject(False, msg, data)
+
+    return ResponseObject(data={
+        "Settings": configuration.configurationInfo.MultiHop.model_dump(),
+        "Preview": preview,
+        "Configuration": configuration
+    })
+
 @app.get(f'{APP_PREFIX}/api/getWireguardConfigurationRawFile')
 def API_GetWireguardConfigurationRawFile():
     configurationName = request.args.get('configurationName')

@@ -12,6 +12,8 @@ import DeleteConfiguration from "@/components/configurationComponents/deleteConf
 import ConfigurationBackupRestore from "@/components/configurationComponents/configurationBackupRestore.vue";
 import EditPeerSettingsOverride
 	from "@/components/configurationComponents/editConfigurationComponents/editPeerSettingsOverride.vue";
+import MultiHopSettings
+	from "@/components/configurationComponents/editConfigurationComponents/multiHopSettings.vue";
 const props = defineProps({
 	configurationInfo: Object
 })
@@ -230,6 +232,8 @@ const deleteConfigurationModal = ref(false)
 									</div>
 									<hr>
 									<EditPeerSettingsOverride :configuration="configurationInfo"></EditPeerSettingsOverride>
+									<hr>
+									<MultiHopSettings :configuration="configurationInfo" @refresh="emit('refresh')"></MultiHopSettings>
 									<hr>
 									<h5 class="mb-3">
 										<LocaleText t="Danger Zone"></LocaleText>

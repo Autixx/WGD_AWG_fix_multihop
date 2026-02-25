@@ -5,6 +5,7 @@ from typing import Any
 
 import jinja2
 import sqlalchemy, random, shutil, configparser, ipaddress, os, subprocess, time, re, uuid, psutil, traceback
+import shlex
 from zipfile import ZipFile
 from datetime import datetime, timedelta
 from itertools import islice
@@ -16,8 +17,8 @@ from .Peer import Peer
 from .PeerJobs import PeerJobs
 from .PeerShareLinks import PeerShareLinks
 from .Utilities import StringToBoolean, GenerateWireguardPublicKey, RegexMatch, ValidateDNSAddress, \
-    ValidateEndpointAllowedIPs
-from .WireguardConfigurationInfo import WireguardConfigurationInfo, PeerGroupsClass
+    ValidateEndpointAllowedIPs, ValidateIPAddresses
+from .WireguardConfigurationInfo import WireguardConfigurationInfo, PeerGroupsClass, MultiHopConfigurationClass
 from .DashboardWebHooks import DashboardWebHooks
 
 
@@ -1210,7 +1211,231 @@ class WireguardConfiguration:
         except Exception as e:
             return False
         
-    def updateConfigurationInfo(self, key: str, value: str | dict[str, str] | dict[str, dict] | bool) -> tuple[bool, Any, str] | tuple[
+    def __multiHopStartMarker(self) -> str:
+        return f": # WGDashboard-MultiHop-START-{self.Name}"
+
+    def __multiHopEndMarker(self) -> str:
+        return f": # WGDashboard-MultiHop-END-{self.Name}"
+
+    def __splitCommandChain(self, commandChain: str) -> list[str]:
+        if not commandChain:
+            return []
+        return [x.strip() for x in commandChain.split(";") if x.strip()]
+
+    def __joinCommandChain(self, commands: list[str]) -> str:
+        return "; ".join([x.strip() for x in commands if x.strip()])
+
+    def __stripManagedMultiHopBlock(self, commandChain: str) -> list[str]:
+        startMarker = self.__multiHopStartMarker()
+        endMarker = self.__multiHopEndMarker()
+        commands = self.__splitCommandChain(commandChain)
+        result = []
+        inManagedBlock = False
+        for command in commands:
+            if command == startMarker:
+                inManagedBlock = True
+                continue
+            if command == endMarker:
+                inManagedBlock = False
+                continue
+            if not inManagedBlock:
+                result.append(command)
+        return result
+
+    def __parsePositiveInteger(
+            self, value: int | str, fieldName: str, minValue: int = 1, maxValue: int = 4294967295
+    ) -> tuple[bool, int | None, str | None]:
+        intValue = None
+        if isinstance(value, int):
+            intValue = value
+        elif isinstance(value, str):
+            value = value.strip()
+            if len(value) == 0:
+                return False, None, f"{fieldName} cannot be empty"
+            if not value.isnumeric():
+                return False, None, f"{fieldName} must be an integer"
+            intValue = int(value)
+        else:
+            return False, None, f"{fieldName} must be an integer"
+
+        if intValue < minValue or intValue > maxValue:
+            return False, None, f"{fieldName} must be >= {minValue} and <= {maxValue}"
+        return True, intValue, None
+
+    def __splitNetworks(self, networks: str) -> list[str]:
+        if not networks:
+            return []
+        return [x.strip() for x in networks.split(",") if x.strip()]
+
+    def __validateMultiHopConfiguration(self, multiHop: MultiHopConfigurationClass) -> tuple[bool, str | None, str | None]:
+        if not multiHop.Enabled:
+            return True, None, None
+
+        if len(multiHop.OutboundInterface.strip()) == 0:
+            return False, "Outbound interface is required when multi-hop is enabled", "OutboundInterface"
+        if not RegexMatch(r"^[a-zA-Z0-9_.-]{1,32}$", multiHop.OutboundInterface.strip()):
+            return False, "Outbound interface contains unsupported characters", "OutboundInterface"
+
+        if multiHop.OutboundGateway and not ValidateIPAddresses(multiHop.OutboundGateway):
+            return False, "Outbound gateway must be an IPv4 or IPv6 address", "OutboundGateway"
+
+        if len(multiHop.RoutedNetworks.strip()) == 0:
+            return False, "Routed networks are required when multi-hop is enabled", "RoutedNetworks"
+        status, msg = ValidateEndpointAllowedIPs(multiHop.RoutedNetworks)
+        if not status:
+            return False, f"Routed networks are invalid: {msg}", "RoutedNetworks"
+
+        if multiHop.ExcludedNetworks:
+            status, msg = ValidateEndpointAllowedIPs(multiHop.ExcludedNetworks)
+            if not status:
+                return False, f"Excluded networks are invalid: {msg}", "ExcludedNetworks"
+
+        status, tableID, msg = self.__parsePositiveInteger(multiHop.TableID, "Table ID")
+        if not status:
+            return False, msg, "TableID"
+
+        # Priority >= 2 because excluded routes are installed at priority - 1.
+        status, rulePriority, msg = self.__parsePositiveInteger(multiHop.RulePriority, "Rule priority", 2)
+        if not status:
+            return False, msg, "RulePriority"
+
+        status, firewallMark, msg = self.__parsePositiveInteger(multiHop.FirewallMark, "Firewall mark")
+        if not status:
+            return False, msg, "FirewallMark"
+
+        if tableID == 0 or rulePriority == 0 or firewallMark == 0:
+            return False, "Table ID, rule priority and firewall mark must be greater than zero", None
+
+        return True, None, None
+
+    def __buildMultiHopCommandBlocks(self, multiHop: MultiHopConfigurationClass) -> tuple[list[str], list[str]]:
+        outboundInterface = shlex.quote(multiHop.OutboundInterface.strip())
+        inboundInterface = shlex.quote(self.Name)
+        outboundGateway = shlex.quote(multiHop.OutboundGateway.strip()) if multiHop.OutboundGateway else None
+        tableID = int(str(multiHop.TableID).strip())
+        rulePriority = int(str(multiHop.RulePriority).strip())
+        firewallMark = int(str(multiHop.FirewallMark).strip())
+        routedNetworks = self.__splitNetworks(multiHop.RoutedNetworks)
+        excludedNetworks = self.__splitNetworks(multiHop.ExcludedNetworks)
+
+        postUpCommands = [
+            self.__multiHopStartMarker(),
+            "sysctl -w net.ipv4.ip_forward=1 >/dev/null",
+            (f"iptables -t mangle -C PREROUTING -i {inboundInterface} -j MARK --set-mark {firewallMark} >/dev/null 2>&1 "
+             f"|| iptables -t mangle -A PREROUTING -i {inboundInterface} -j MARK --set-mark {firewallMark}"),
+            f"ip rule add fwmark {firewallMark} table {tableID} priority {rulePriority} >/dev/null 2>&1 || true"
+        ]
+        postDownCommands = [
+            self.__multiHopStartMarker()
+        ]
+
+        for network in routedNetworks:
+            quotedNetwork = shlex.quote(network)
+            if outboundGateway:
+                postUpCommands.append(
+                    f"ip route replace {quotedNetwork} via {outboundGateway} dev {outboundInterface} table {tableID}"
+                )
+                postDownCommands.append(
+                    f"ip route del {quotedNetwork} via {outboundGateway} dev {outboundInterface} table {tableID} >/dev/null 2>&1 || true"
+                )
+            else:
+                postUpCommands.append(
+                    f"ip route replace {quotedNetwork} dev {outboundInterface} table {tableID}"
+                )
+                postDownCommands.append(
+                    f"ip route del {quotedNetwork} dev {outboundInterface} table {tableID} >/dev/null 2>&1 || true"
+                )
+
+        for network in excludedNetworks:
+            quotedNetwork = shlex.quote(network)
+            postUpCommands.append(
+                f"ip rule add to {quotedNetwork} table main priority {rulePriority - 1} >/dev/null 2>&1 || true"
+            )
+            postDownCommands.append(
+                f"ip rule del to {quotedNetwork} table main priority {rulePriority - 1} >/dev/null 2>&1 || true"
+            )
+
+        if multiHop.EnableMasquerade:
+            postUpCommands.append(
+                f"iptables -t nat -C POSTROUTING -o {outboundInterface} -j MASQUERADE >/dev/null 2>&1 "
+                f"|| iptables -t nat -A POSTROUTING -o {outboundInterface} -j MASQUERADE"
+            )
+            postDownCommands.append(
+                f"iptables -t nat -D POSTROUTING -o {outboundInterface} -j MASQUERADE >/dev/null 2>&1 || true"
+            )
+
+        postDownCommands.extend([
+            f"ip rule del fwmark {firewallMark} table {tableID} priority {rulePriority} >/dev/null 2>&1 || true",
+            f"iptables -t mangle -D PREROUTING -i {inboundInterface} -j MARK --set-mark {firewallMark} >/dev/null 2>&1 || true",
+            self.__multiHopEndMarker()
+        ])
+        postUpCommands.append(self.__multiHopEndMarker())
+        return postUpCommands, postDownCommands
+
+    def getMultiHopPreview(self, newValue: dict[str, Any] | None = None) -> tuple[bool, str | None, dict[str, Any] | None]:
+        try:
+            multiHop = (
+                self.configurationInfo.MultiHop.model_validate(newValue)
+                if newValue is not None else self.configurationInfo.MultiHop
+            )
+        except Exception as e:
+            return False, str(e), None
+
+        status, msg, key = self.__validateMultiHopConfiguration(multiHop)
+        if not status:
+            return False, msg, {"Key": key}
+
+        currentPostUp = self.__stripManagedMultiHopBlock(self.PostUp)
+        currentPostDown = self.__stripManagedMultiHopBlock(self.PostDown)
+        resultPostUp = list(currentPostUp)
+        resultPostDown = list(currentPostDown)
+        resultTable = self.Table
+        blockPostUp = []
+        blockPostDown = []
+
+        if multiHop.Enabled:
+            blockPostUp, blockPostDown = self.__buildMultiHopCommandBlocks(multiHop)
+            resultPostUp += blockPostUp
+            resultPostDown = blockPostDown + resultPostDown
+            if multiHop.AutoSetInterfaceTableOff:
+                resultTable = "off"
+
+        return True, None, {
+            "Settings": multiHop.model_dump(),
+            "Current": {
+                "PostUp": self.PostUp,
+                "PostDown": self.PostDown,
+                "Table": self.Table
+            },
+            "ManagedBlock": {
+                "PostUp": self.__joinCommandChain(blockPostUp),
+                "PostDown": self.__joinCommandChain(blockPostDown)
+            },
+            "Result": {
+                "PostUp": self.__joinCommandChain(resultPostUp),
+                "PostDown": self.__joinCommandChain(resultPostDown),
+                "Table": resultTable
+            }
+        }
+
+    def applyMultiHopConfiguration(self) -> tuple[bool, str | None, dict[str, Any] | None]:
+        status, msg, preview = self.getMultiHopPreview()
+        if not status:
+            return False, msg, preview
+        if preview is None:
+            return False, "Failed to build multi-hop preview", None
+
+        newData = self.toJson()
+        newData["PostUp"] = preview["Result"]["PostUp"]
+        newData["PostDown"] = preview["Result"]["PostDown"]
+        newData["Table"] = preview["Result"]["Table"]
+
+        status, err = self.updateConfigurationSettings(newData)
+        if not status:
+            return False, err, preview
+        return True, None, preview
+
+    def updateConfigurationInfo(self, key: str, value: str | dict[str, str] | dict[str, dict] | dict[str, Any] | bool) -> tuple[bool, Any, str] | tuple[
         bool, str, None] | tuple[bool, None, None]:
         if key == "Description":
             self.configurationInfo.Description = value
@@ -1233,6 +1458,15 @@ class WireguardConfiguration:
             self.configurationInfo.PeerTrafficTracking = value
         elif key == "PeerHistoricalEndpointTracking":
             self.configurationInfo.PeerHistoricalEndpointTracking = value
+        elif key == "MultiHop":
+            try:
+                multiHopValue = self.configurationInfo.MultiHop.model_validate(value)
+            except Exception as e:
+                return False, str(e), None
+            status, msg, errorKey = self.__validateMultiHopConfiguration(multiHopValue)
+            if not status:
+                return False, msg, errorKey
+            self.configurationInfo.MultiHop = multiHopValue
         else: 
             return False, "Key does not exist", None
         self.storeConfigurationInfo()
@@ -1241,12 +1475,12 @@ class WireguardConfiguration:
     def __validateOverridePeerSettings(self, key: str, value: str | int) -> tuple[bool, None] | tuple[bool, str]:
         status = True
         msg = None
-        print(value)
         if key == "DNS" and value:
             status, msg = ValidateDNSAddress(value)
         elif key == "EndpointAllowedIPs" and value:
             status, msg = ValidateEndpointAllowedIPs(value)
         elif key == "ListenPort" and value:
+            value = str(value).strip()
             if not value.isnumeric() or not (1 <= int(value) <= 65535):
                 status = False
                 msg = "Listen Port must be >= 1 and <= 65535"        
