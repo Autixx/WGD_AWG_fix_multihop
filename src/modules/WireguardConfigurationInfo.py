@@ -26,6 +26,8 @@ class MultiHopConfigurationClass(BaseModel):
     FirewallMark: int | str = 51820
     EnableMasquerade: bool = True
     AutoSetInterfaceTableOff: bool = True
+    LocalDNSInstalled: bool = False
+    LocalDNSAddress: str = ''
 
 class WireguardConfigurationInfo(BaseModel):
     Description: str = ''

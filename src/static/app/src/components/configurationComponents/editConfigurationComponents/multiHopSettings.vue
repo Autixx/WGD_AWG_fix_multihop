@@ -20,7 +20,9 @@ const defaultSettings = () => ({
 	RulePriority: 10000,
 	FirewallMark: 51820,
 	EnableMasquerade: true,
-	AutoSetInterfaceTableOff: true
+	AutoSetInterfaceTableOff: true,
+	LocalDNSInstalled: false,
+	LocalDNSAddress: ""
 })
 
 const settings = ref(defaultSettings())
@@ -196,6 +198,27 @@ onMounted(async () => {
 			       class="form-control form-control-sm rounded-3"
 			       :class="{'is-invalid': errorField === 'ExcludedNetworks'}"
 			       v-model="settings.ExcludedNetworks">
+		</div>
+		<div class="d-flex gap-3 flex-column">
+			<div class="form-check form-switch">
+				<input class="form-check-input" type="checkbox" role="switch" id="multiHop_localDNSInstalled" v-model="settings.LocalDNSInstalled">
+				<label class="form-check-label" for="multiHop_localDNSInstalled">
+					Установлен локальный DNS
+				</label>
+			</div>
+			<div>
+				<label for="multiHop_localDNSAddress" class="form-label">
+					<small class="text-muted">
+						Адрес локального DNS
+					</small>
+				</label>
+				<input type="text"
+				       id="multiHop_localDNSAddress"
+				       class="form-control form-control-sm rounded-3"
+				       :disabled="!settings.LocalDNSInstalled"
+				       :class="{'is-invalid': errorField === 'LocalDNSAddress'}"
+				       v-model="settings.LocalDNSAddress">
+			</div>
 		</div>
 		<div class="row gx-2 gy-2">
 			<div class="col-12 col-md-4">

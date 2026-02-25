@@ -1268,105 +1268,158 @@ class WireguardConfiguration:
         return [x.strip() for x in networks.split(",") if x.strip()]
 
     def __validateMultiHopConfiguration(self, multiHop: MultiHopConfigurationClass) -> tuple[bool, str | None, str | None]:
-        if not multiHop.Enabled:
+        if not multiHop.Enabled and not multiHop.LocalDNSInstalled:
             return True, None, None
 
-        if len(multiHop.OutboundInterface.strip()) == 0:
-            return False, "Outbound interface is required when multi-hop is enabled", "OutboundInterface"
-        if not RegexMatch(r"^[a-zA-Z0-9_.-]{1,32}$", multiHop.OutboundInterface.strip()):
-            return False, "Outbound interface contains unsupported characters", "OutboundInterface"
+        if multiHop.Enabled:
+            if len(multiHop.OutboundInterface.strip()) == 0:
+                return False, "Outbound interface is required when multi-hop is enabled", "OutboundInterface"
+            if not RegexMatch(r"^[a-zA-Z0-9_.-]{1,32}$", multiHop.OutboundInterface.strip()):
+                return False, "Outbound interface contains unsupported characters", "OutboundInterface"
 
-        if multiHop.OutboundGateway and not ValidateIPAddresses(multiHop.OutboundGateway):
-            return False, "Outbound gateway must be an IPv4 or IPv6 address", "OutboundGateway"
+            if multiHop.OutboundGateway and not ValidateIPAddresses(multiHop.OutboundGateway):
+                return False, "Outbound gateway must be an IPv4 or IPv6 address", "OutboundGateway"
 
-        if len(multiHop.RoutedNetworks.strip()) == 0:
-            return False, "Routed networks are required when multi-hop is enabled", "RoutedNetworks"
-        status, msg = ValidateEndpointAllowedIPs(multiHop.RoutedNetworks)
-        if not status:
-            return False, f"Routed networks are invalid: {msg}", "RoutedNetworks"
-
-        if multiHop.ExcludedNetworks:
-            status, msg = ValidateEndpointAllowedIPs(multiHop.ExcludedNetworks)
+            if len(multiHop.RoutedNetworks.strip()) == 0:
+                return False, "Routed networks are required when multi-hop is enabled", "RoutedNetworks"
+            status, msg = ValidateEndpointAllowedIPs(multiHop.RoutedNetworks)
             if not status:
-                return False, f"Excluded networks are invalid: {msg}", "ExcludedNetworks"
+                return False, f"Routed networks are invalid: {msg}", "RoutedNetworks"
 
-        status, tableID, msg = self.__parsePositiveInteger(multiHop.TableID, "Table ID")
-        if not status:
-            return False, msg, "TableID"
+            if multiHop.ExcludedNetworks:
+                status, msg = ValidateEndpointAllowedIPs(multiHop.ExcludedNetworks)
+                if not status:
+                    return False, f"Excluded networks are invalid: {msg}", "ExcludedNetworks"
 
-        # Priority >= 2 because excluded routes are installed at priority - 1.
-        status, rulePriority, msg = self.__parsePositiveInteger(multiHop.RulePriority, "Rule priority", 2)
-        if not status:
-            return False, msg, "RulePriority"
+            status, tableID, msg = self.__parsePositiveInteger(multiHop.TableID, "Table ID")
+            if not status:
+                return False, msg, "TableID"
 
-        status, firewallMark, msg = self.__parsePositiveInteger(multiHop.FirewallMark, "Firewall mark")
-        if not status:
-            return False, msg, "FirewallMark"
+            # Priority >= 2 because excluded routes are installed at priority - 1.
+            status, rulePriority, msg = self.__parsePositiveInteger(multiHop.RulePriority, "Rule priority", 2)
+            if not status:
+                return False, msg, "RulePriority"
 
-        if tableID == 0 or rulePriority == 0 or firewallMark == 0:
-            return False, "Table ID, rule priority and firewall mark must be greater than zero", None
+            status, firewallMark, msg = self.__parsePositiveInteger(multiHop.FirewallMark, "Firewall mark")
+            if not status:
+                return False, msg, "FirewallMark"
+
+            if tableID == 0 or rulePriority == 0 or firewallMark == 0:
+                return False, "Table ID, rule priority and firewall mark must be greater than zero", None
+
+        if multiHop.LocalDNSInstalled:
+            localDNSAddress = multiHop.LocalDNSAddress.strip()
+            if len(localDNSAddress) == 0:
+                return False, "Local DNS address is required", "LocalDNSAddress"
+            try:
+                ipaddress.ip_address(localDNSAddress)
+            except ValueError:
+                return False, "Local DNS address must be a valid IPv4 or IPv6 address", "LocalDNSAddress"
 
         return True, None, None
 
     def __buildMultiHopCommandBlocks(self, multiHop: MultiHopConfigurationClass) -> tuple[list[str], list[str]]:
-        outboundInterface = shlex.quote(multiHop.OutboundInterface.strip())
         inboundInterface = shlex.quote(self.Name)
-        outboundGateway = shlex.quote(multiHop.OutboundGateway.strip()) if multiHop.OutboundGateway else None
-        tableID = int(str(multiHop.TableID).strip())
-        rulePriority = int(str(multiHop.RulePriority).strip())
-        firewallMark = int(str(multiHop.FirewallMark).strip())
-        routedNetworks = self.__splitNetworks(multiHop.RoutedNetworks)
-        excludedNetworks = self.__splitNetworks(multiHop.ExcludedNetworks)
-
         postUpCommands = [
-            self.__multiHopStartMarker(),
-            "sysctl -w net.ipv4.ip_forward=1 >/dev/null",
-            (f"iptables -t mangle -C PREROUTING -i {inboundInterface} -j MARK --set-mark {firewallMark} >/dev/null 2>&1 "
-             f"|| iptables -t mangle -A PREROUTING -i {inboundInterface} -j MARK --set-mark {firewallMark}"),
-            f"ip rule add fwmark {firewallMark} table {tableID} priority {rulePriority} >/dev/null 2>&1 || true"
+            self.__multiHopStartMarker()
         ]
         postDownCommands = [
             self.__multiHopStartMarker()
         ]
 
-        for network in routedNetworks:
-            quotedNetwork = shlex.quote(network)
-            if outboundGateway:
+        if multiHop.Enabled:
+            outboundInterface = shlex.quote(multiHop.OutboundInterface.strip())
+            outboundGateway = shlex.quote(multiHop.OutboundGateway.strip()) if multiHop.OutboundGateway else None
+            tableID = int(str(multiHop.TableID).strip())
+            rulePriority = int(str(multiHop.RulePriority).strip())
+            firewallMark = int(str(multiHop.FirewallMark).strip())
+            routedNetworks = self.__splitNetworks(multiHop.RoutedNetworks)
+            excludedNetworks = self.__splitNetworks(multiHop.ExcludedNetworks)
+
+            postUpCommands.extend([
+                "sysctl -w net.ipv4.ip_forward=1 >/dev/null",
+                (f"iptables -t mangle -C PREROUTING -i {inboundInterface} -j MARK --set-mark {firewallMark} >/dev/null 2>&1 "
+                 f"|| iptables -t mangle -A PREROUTING -i {inboundInterface} -j MARK --set-mark {firewallMark}"),
+                f"ip rule add fwmark {firewallMark} table {tableID} priority {rulePriority} >/dev/null 2>&1 || true"
+            ])
+
+            for network in routedNetworks:
+                quotedNetwork = shlex.quote(network)
+                if outboundGateway:
+                    postUpCommands.append(
+                        f"ip route replace {quotedNetwork} via {outboundGateway} dev {outboundInterface} table {tableID}"
+                    )
+                    postDownCommands.append(
+                        f"ip route del {quotedNetwork} via {outboundGateway} dev {outboundInterface} table {tableID} >/dev/null 2>&1 || true"
+                    )
+                else:
+                    postUpCommands.append(
+                        f"ip route replace {quotedNetwork} dev {outboundInterface} table {tableID}"
+                    )
+                    postDownCommands.append(
+                        f"ip route del {quotedNetwork} dev {outboundInterface} table {tableID} >/dev/null 2>&1 || true"
+                    )
+
+            for network in excludedNetworks:
+                quotedNetwork = shlex.quote(network)
                 postUpCommands.append(
-                    f"ip route replace {quotedNetwork} via {outboundGateway} dev {outboundInterface} table {tableID}"
+                    f"ip rule add to {quotedNetwork} table main priority {rulePriority - 1} >/dev/null 2>&1 || true"
                 )
                 postDownCommands.append(
-                    f"ip route del {quotedNetwork} via {outboundGateway} dev {outboundInterface} table {tableID} >/dev/null 2>&1 || true"
+                    f"ip rule del to {quotedNetwork} table main priority {rulePriority - 1} >/dev/null 2>&1 || true"
+                )
+
+            if multiHop.EnableMasquerade:
+                postUpCommands.append(
+                    f"iptables -t nat -C POSTROUTING -o {outboundInterface} -j MASQUERADE >/dev/null 2>&1 "
+                    f"|| iptables -t nat -A POSTROUTING -o {outboundInterface} -j MASQUERADE"
+                )
+                postDownCommands.append(
+                    f"iptables -t nat -D POSTROUTING -o {outboundInterface} -j MASQUERADE >/dev/null 2>&1 || true"
+                )
+
+            postDownCommands.extend([
+                f"ip rule del fwmark {firewallMark} table {tableID} priority {rulePriority} >/dev/null 2>&1 || true",
+                f"iptables -t mangle -D PREROUTING -i {inboundInterface} -j MARK --set-mark {firewallMark} >/dev/null 2>&1 || true"
+            ])
+
+        if multiHop.LocalDNSInstalled:
+            localDNSAddress = multiHop.LocalDNSAddress.strip()
+            localDNSIP = ipaddress.ip_address(localDNSAddress)
+            if localDNSIP.version == 4:
+                dnsDestination = shlex.quote(f"{localDNSAddress}:53")
+                preRoutingCheck = (
+                    f"iptables -t nat -C PREROUTING -i {inboundInterface} -p udp --dport 53 "
+                    f"-j DNAT --to-destination {dnsDestination} >/dev/null 2>&1"
+                )
+                preRoutingAdd = (
+                    f"iptables -t nat -A PREROUTING -i {inboundInterface} -p udp --dport 53 "
+                    f"-j DNAT --to-destination {dnsDestination}"
+                )
+                preRoutingDel = (
+                    f"iptables -t nat -D PREROUTING -i {inboundInterface} -p udp --dport 53 "
+                    f"-j DNAT --to-destination {dnsDestination} >/dev/null 2>&1 || true"
                 )
             else:
-                postUpCommands.append(
-                    f"ip route replace {quotedNetwork} dev {outboundInterface} table {tableID}"
+                dnsDestination = shlex.quote(f"[{localDNSAddress}]:53")
+                preRoutingCheck = (
+                    f"ip6tables -t nat -C PREROUTING -i {inboundInterface} -p udp --dport 53 "
+                    f"-j DNAT --to-destination {dnsDestination} >/dev/null 2>&1"
                 )
-                postDownCommands.append(
-                    f"ip route del {quotedNetwork} dev {outboundInterface} table {tableID} >/dev/null 2>&1 || true"
+                preRoutingAdd = (
+                    f"ip6tables -t nat -A PREROUTING -i {inboundInterface} -p udp --dport 53 "
+                    f"-j DNAT --to-destination {dnsDestination}"
                 )
-
-        for network in excludedNetworks:
-            quotedNetwork = shlex.quote(network)
+                preRoutingDel = (
+                    f"ip6tables -t nat -D PREROUTING -i {inboundInterface} -p udp --dport 53 "
+                    f"-j DNAT --to-destination {dnsDestination} >/dev/null 2>&1 || true"
+                )
             postUpCommands.append(
-                f"ip rule add to {quotedNetwork} table main priority {rulePriority - 1} >/dev/null 2>&1 || true"
+                f"{preRoutingCheck} || {preRoutingAdd}"
             )
-            postDownCommands.append(
-                f"ip rule del to {quotedNetwork} table main priority {rulePriority - 1} >/dev/null 2>&1 || true"
-            )
-
-        if multiHop.EnableMasquerade:
-            postUpCommands.append(
-                f"iptables -t nat -C POSTROUTING -o {outboundInterface} -j MASQUERADE >/dev/null 2>&1 "
-                f"|| iptables -t nat -A POSTROUTING -o {outboundInterface} -j MASQUERADE"
-            )
-            postDownCommands.append(
-                f"iptables -t nat -D POSTROUTING -o {outboundInterface} -j MASQUERADE >/dev/null 2>&1 || true"
-            )
+            postDownCommands.append(preRoutingDel)
 
         postDownCommands.extend([
-            f"ip rule del fwmark {firewallMark} table {tableID} priority {rulePriority} >/dev/null 2>&1 || true",
-            f"iptables -t mangle -D PREROUTING -i {inboundInterface} -j MARK --set-mark {firewallMark} >/dev/null 2>&1 || true",
             self.__multiHopEndMarker()
         ])
         postUpCommands.append(self.__multiHopEndMarker())
@@ -1393,11 +1446,11 @@ class WireguardConfiguration:
         blockPostUp = []
         blockPostDown = []
 
-        if multiHop.Enabled:
+        if multiHop.Enabled or multiHop.LocalDNSInstalled:
             blockPostUp, blockPostDown = self.__buildMultiHopCommandBlocks(multiHop)
             resultPostUp += blockPostUp
             resultPostDown = blockPostDown + resultPostDown
-            if multiHop.AutoSetInterfaceTableOff:
+            if multiHop.Enabled and multiHop.AutoSetInterfaceTableOff:
                 resultTable = "off"
 
         return True, None, {
