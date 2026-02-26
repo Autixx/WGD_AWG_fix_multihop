@@ -272,7 +272,7 @@ create_bootstrap_inbound() {
   local dns_value="$6"
   local force="$7"
   local should_start="$8"
-  local conf_dir conf_path quick_bin nat_subnet private_key public_key service_unit
+  local conf_dir conf_path quick_bin nat_subnet private_key public_key service_unit dns_line
   local awg_jc="$9"
   local awg_jmin="${10}"
   local awg_jmax="${11}"
@@ -362,17 +362,28 @@ PY
     fail "[bootstrap] ${conf_path} already exists. Use --bootstrap-force to overwrite."
   fi
 
+  dns_line=""
+  if [[ -n "${dns_value}" ]]; then
+    if command -v resolvconf >/dev/null 2>&1; then
+      dns_line="DNS = ${dns_value}"
+    else
+      echo "[bootstrap] WARN: resolvconf is not installed; skipping DNS line in ${conf_path}."
+    fi
+  fi
+
   umask 077
   cat > "${conf_path}" <<EOF
 [Interface]
 PrivateKey = ${private_key}
 Address = ${address_cidr}
 ListenPort = ${listen_port}
-DNS = ${dns_value}
 PostUp = iptables -t nat -A POSTROUTING -s ${nat_subnet} -o ${out_if} -j MASQUERADE; iptables -A FORWARD -i ${interface_name} -j ACCEPT; iptables -A FORWARD -o ${interface_name} -j ACCEPT
 PreDown = iptables -t nat -D POSTROUTING -s ${nat_subnet} -o ${out_if} -j MASQUERADE; iptables -D FORWARD -i ${interface_name} -j ACCEPT; iptables -D FORWARD -o ${interface_name} -j ACCEPT
 SaveConfig = false
 EOF
+  if [[ -n "${dns_line}" ]]; then
+    sed -i "/^PostUp = /i ${dns_line}" "${conf_path}"
+  fi
   if [[ "${protocol}" == "awg" ]]; then
     cat >> "${conf_path}" <<EOF
 Jc = ${awg_jc}
@@ -580,6 +591,9 @@ apt-get install -y \
 
 if ! command -v wg >/dev/null 2>&1 || ! command -v wg-quick >/dev/null 2>&1; then
   apt-get install -y wireguard wireguard-tools || apt-get install -y wireguard-tools
+fi
+if ! command -v resolvconf >/dev/null 2>&1; then
+  apt-get install -y resolvconf || apt-get install -y openresolv || true
 fi
 
 mkdir -p /etc/wireguard
