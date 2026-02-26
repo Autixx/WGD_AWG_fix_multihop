@@ -19,7 +19,8 @@ from sqlalchemy import RowMapping
 from modules.Utilities import (
     RegexMatch, StringToBoolean,
     ValidateIPAddressesWithRange, ValidateDNSAddress,
-    GenerateWireguardPublicKey, GenerateWireguardPrivateKey
+    GenerateWireguardPublicKey, GenerateWireguardPrivateKey,
+    ValidatePeerEndpoint
 )
 from packaging import version
 from modules.Email import EmailSender
@@ -838,15 +839,16 @@ def API_updatePeerSettings(configName):
         preshared_key = data['preshared_key']
         mtu = data['mtu']
         keepalive = data['keepalive']
+        remote_endpoint = data.get('remote_endpoint', "")
         wireguardConfig = WireguardConfigurations[configName]
         foundPeer, peer = wireguardConfig.searchPeer(id)
         if foundPeer:
             if wireguardConfig.Protocol == 'wg':
                 status, msg = peer.updatePeer(name, private_key, preshared_key, dns_addresses,
-                                       allowed_ip, endpoint_allowed_ip, mtu, keepalive)
+                                       allowed_ip, endpoint_allowed_ip, mtu, keepalive, remote_endpoint)
             else:
                 status, msg = peer.updatePeer(name, private_key, preshared_key, dns_addresses,
-                    allowed_ip, endpoint_allowed_ip, mtu, keepalive, "off")
+                    allowed_ip, endpoint_allowed_ip, mtu, keepalive, remote_endpoint, "off")
             wireguardConfig.getPeers()
             DashboardWebHooks.RunWebHook('peer_updated', {
                 "configuration": wireguardConfig.Name,
@@ -1123,6 +1125,121 @@ def API_addPeers(configName):
                                   f"Add peers failed. Reason: {e}")
 
     return ResponseObject(False, "Configuration does not exist")
+
+@app.post(f'{APP_PREFIX}/api/addSiteToSitePeer/<configName>')
+def API_addSiteToSitePeer(configName):
+    if configName not in WireguardConfigurations.keys():
+        return ResponseObject(False, "Configuration does not exist", status_code=404)
+
+    data: dict = request.get_json() or {}
+    config = WireguardConfigurations.get(configName)
+
+    public_key = data.get("public_key", "").strip()
+    if len(public_key) == 0:
+        return ResponseObject(False, "Public Key is required", status_code=400)
+    if config.searchPeer(public_key)[0]:
+        return ResponseObject(False, "This peer already exist", status_code=409)
+
+    endpoint = data.get("endpoint", "").strip()
+    if len(endpoint) == 0:
+        return ResponseObject(False, "Endpoint is required", status_code=400)
+    endpointStatus, endpointMessage = ValidatePeerEndpoint(endpoint)
+    if not endpointStatus:
+        return ResponseObject(False, endpointMessage, status_code=400)
+
+    allowed_ips = data.get("allowed_ips", [])
+    if isinstance(allowed_ips, str):
+        allowed_ips = [x.strip() for x in allowed_ips.split(",") if len(x.strip()) > 0]
+    elif isinstance(allowed_ips, list):
+        allowed_ips = [str(x).strip() for x in allowed_ips if len(str(x).strip()) > 0]
+    else:
+        allowed_ips = []
+
+    if len(allowed_ips) == 0:
+        return ResponseObject(False, "Allowed IPs are required", status_code=400)
+
+    for ip in allowed_ips:
+        try:
+            ipaddress.ip_network(ip, strict=False)
+        except ValueError:
+            return ResponseObject(False, f"This Allowed IP address is invalid: {ip}", status_code=400)
+
+    allowed_ips_validation = bool(data.get("allowed_ips_validation", False))
+    if allowed_ips_validation:
+        _, availableIps = config.getAvailableIP(-1)
+        for i in allowed_ips:
+            found = False
+            for subnet in availableIps.keys():
+                network = ipaddress.ip_network(subnet, False)
+                ap = ipaddress.ip_network(i, strict=False)
+                if network.version == ap.version and ap.subnet_of(network):
+                    found = True
+                    break
+            if not found:
+                return ResponseObject(False, f"This IP is not available: {i}", status_code=400)
+
+    endpoint_allowed_ip = data.get(
+        'endpoint_allowed_ip',
+        DashboardConfig.GetConfig("Peers", "peer_endpoint_allowed_ip")[1]
+    )
+    endpoint_allowed_ip = str(endpoint_allowed_ip or "")
+    if not ValidateIPAddressesWithRange(endpoint_allowed_ip):
+        return ResponseObject(False, "Endpoint Allowed IPs format is incorrect", status_code=400)
+
+    dns_addresses = str(data.get('DNS', DashboardConfig.GetConfig("Peers", "peer_global_DNS")[1]) or "")
+    if len(dns_addresses) > 0 and not ValidateDNSAddress(dns_addresses)[0]:
+        return ResponseObject(False, "DNS format is incorrect", status_code=400)
+
+    mtu = data.get('mtu', None)
+    if type(mtu) is not int or mtu < 0 or mtu > 1460:
+        default = DashboardConfig.GetConfig("Peers", "peer_mtu")[1]
+        if isinstance(default, str) and default.isnumeric():
+            try:
+                mtu = int(default)
+            except Exception:
+                mtu = 0
+        else:
+            mtu = 0
+
+    keep_alive = data.get('keepalive', None)
+    if type(keep_alive) is not int or keep_alive < 0:
+        default = DashboardConfig.GetConfig("Peers", "peer_keep_alive")[1]
+        if isinstance(default, str) and default.isnumeric():
+            try:
+                keep_alive = int(default)
+            except Exception:
+                keep_alive = 0
+        else:
+            keep_alive = 0
+
+    name = data.get("name", "")
+    private_key = data.get("private_key", "")
+    if len(private_key) > 0:
+        genPub = GenerateWireguardPublicKey(private_key)[1]
+        if public_key != genPub:
+            return ResponseObject(False, "Provided Public Key does not match provided Private Key", status_code=400)
+
+    preshared_key = data.get('preshared_key', "")
+
+    if not config.getStatus():
+        config.toggleConfiguration()
+
+    status, addedPeers, message = config.addPeers([{
+        "name": name,
+        "id": public_key,
+        "private_key": private_key,
+        "allowed_ip": ",".join(allowed_ips),
+        "preshared_key": preshared_key,
+        "endpoint_allowed_ip": endpoint_allowed_ip,
+        "DNS": dns_addresses,
+        "mtu": mtu,
+        "keepalive": keep_alive,
+        "advanced_security": "off",
+        "endpoint": endpoint,
+        "apply_keepalive": True,
+        "remote_endpoint": endpoint
+    }])
+    return ResponseObject(status=status, message=message, data=addedPeers)
 
 @app.get(f"{APP_PREFIX}/api/downloadPeer/<configName>")
 def API_downloadPeer(configName):

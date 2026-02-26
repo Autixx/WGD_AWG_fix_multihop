@@ -456,7 +456,7 @@ class WireguardConfiguration:
                                     "cumu_data": 0,
                                     "mtu": self.DashboardConfig.GetConfig("Peers", "peer_mtu")[1] if len(self.DashboardConfig.GetConfig("Peers", "peer_mtu")[1]) > 0 else None,
                                     "keepalive": self.DashboardConfig.GetConfig("Peers", "peer_keep_alive")[1] if len(self.DashboardConfig.GetConfig("Peers", "peer_keep_alive")[1]) > 0 else None,
-                                    "remote_endpoint": self.DashboardConfig.GetConfig("Peers", "remote_endpoint")[1],
+                                    "remote_endpoint": i.get("Endpoint", self.DashboardConfig.GetConfig("Peers", "remote_endpoint")[1]),
                                     "preshared_key": i["PresharedKey"] if "PresharedKey" in i.keys() else ""
                                 }
                                 with self.engine.begin() as conn:
@@ -464,14 +464,19 @@ class WireguardConfiguration:
                                         self.peersTable.insert().values(tempPeer)
                                     )                                    
                             else:
+                                parsedEndpoint = i.get("Endpoint", tempPeer.get("remote_endpoint", ""))
                                 with self.engine.begin() as conn:
                                     conn.execute(
                                         self.peersTable.update().values({
-                                            "allowed_ip": i.get("AllowedIPs", "N/A")
+                                            "allowed_ip": i.get("AllowedIPs", "N/A"),
+                                            "remote_endpoint": parsedEndpoint
                                         }).where(
                                             self.peersTable.columns.id == i['PublicKey']
                                         )
                                     )
+                                tempPeer = dict(tempPeer)
+                                tempPeer["allowed_ip"] = i.get("AllowedIPs", "N/A")
+                                tempPeer["remote_endpoint"] = parsedEndpoint
                             tmpList.append(Peer(tempPeer, self))
                 except Exception as e:
                     current_app.logger.error(f"{self.Name} getPeers() Error: {e}")
@@ -548,7 +553,7 @@ class WireguardConfiguration:
                         "cumu_data": 0,
                         "mtu": i['mtu'],
                         "keepalive": i['keepalive'],
-                        "remote_endpoint": self.DashboardConfig.GetConfig("Peers", "remote_endpoint")[1],
+                        "remote_endpoint": i.get("remote_endpoint", self.DashboardConfig.GetConfig("Peers", "remote_endpoint")[1]),
                         "preshared_key": i["preshared_key"]
                     }
                     existingPeer = conn.execute(
@@ -574,8 +579,15 @@ class WireguardConfiguration:
                     with open(uid, "w+") as f:
                         f.write(p['preshared_key'])
 
-                subprocess.check_output(f"{self.Protocol} set {self.Name} peer {p['id']} allowed-ips {p['allowed_ip'].replace(' ', '')}{f' preshared-key {uid}' if presharedKeyExist else ''}",
-                                        shell=True, stderr=subprocess.STDOUT)
+                peerSetCommand = f"{self.Protocol} set {self.Name} peer {p['id']} allowed-ips {p['allowed_ip'].replace(' ', '')}"
+                if len(str(p.get("endpoint", "")).strip()) > 0:
+                    peerSetCommand += f" endpoint {str(p.get('endpoint')).strip()}"
+                if p.get("apply_keepalive", False):
+                    peerSetCommand += f" persistent-keepalive {int(p.get('keepalive', 0))}"
+                if presharedKeyExist:
+                    peerSetCommand += f" preshared-key {uid}"
+
+                subprocess.check_output(peerSetCommand, shell=True, stderr=subprocess.STDOUT)
                 if presharedKeyExist:
                     os.remove(uid)
             subprocess.check_output(

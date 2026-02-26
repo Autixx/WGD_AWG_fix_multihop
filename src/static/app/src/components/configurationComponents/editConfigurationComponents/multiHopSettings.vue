@@ -370,13 +370,13 @@ onMounted(async () => {
 			<div class="form-check form-switch">
 				<input class="form-check-input" type="checkbox" role="switch" id="multiHop_localDNSInstalled" v-model="settings.LocalDNSInstalled">
 				<label class="form-check-label" for="multiHop_localDNSInstalled">
-					Установлен локальный DNS
+					<LocaleText t="Local DNS Installed"></LocaleText>
 				</label>
 			</div>
 			<div>
 				<label for="multiHop_localDNSAddress" class="form-label">
 					<small class="text-muted">
-						Адрес локального DNS
+						<LocaleText t="Local DNS Address"></LocaleText>
 					</small>
 				</label>
 				<input type="text"

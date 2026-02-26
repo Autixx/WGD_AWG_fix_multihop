@@ -147,6 +147,18 @@ export default {
 								       id="peer_endpoint_allowed_ips">
 							</div>
 							<div>
+								<label for="peer_endpoint" class="form-label">
+									<small class="text-muted">
+										<LocaleText t="Endpoint"></LocaleText>
+									</small>
+								</label>
+								<input type="text" class="form-control form-control-sm rounded-3"
+								       :disabled="this.saving"
+								       v-model="this.data.remote_endpoint"
+								       id="peer_endpoint"
+								       placeholder="host:port">
+							</div>
+							<div>
 								<label for="peer_DNS_textbox" class="form-label">
 									<small class="text-muted">
 										<LocaleText t="DNS"></LocaleText>

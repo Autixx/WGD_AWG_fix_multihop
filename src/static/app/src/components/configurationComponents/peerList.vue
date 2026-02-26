@@ -22,6 +22,7 @@ const PeerJobsLogsModal = defineAsyncComponent(() => import("@/components/config
 const EditConfigurationModal = defineAsyncComponent(() => import("@/components/configurationComponents/editConfiguration.vue"))
 const SelectPeersModal = defineAsyncComponent(() => import("@/components/configurationComponents/selectPeers.vue"))
 const PeerAddModal = defineAsyncComponent(() => import("@/components/configurationComponents/peerAddModal.vue"))
+const StSPeerModal = defineAsyncComponent(() => import("@/components/configurationComponents/stsPeerModal.vue"))
 
 const dashboardStore = DashboardConfigurationStore()
 const wireguardConfigurationStore = WireguardConfigurationsStore()
@@ -33,6 +34,9 @@ const configurationModalSelectedPeer = ref({})
 const configurationModals = ref({
 	peerNew: {
 		modalOpen: false	
+	},
+	stsPeer: {
+		modalOpen: false
 	},
 	peerSetting: {
 		modalOpen: false,
@@ -293,6 +297,13 @@ watch(() => route.query.id, (newValue) => {
 					<i class="bi bi-plus-circle me-2"></i>
 					<LocaleText t="Peer"></LocaleText>
 				</a>
+				<a
+					role="button"
+					@click="configurationModals.stsPeer.modalOpen = true"
+					class="titleBtn py-2 text-decoration-none btn text-primary-emphasis bg-primary-subtle rounded-3 border-1 border-primary-subtle ">
+					<i class="bi bi-diagram-3 me-2"></i>
+					<LocaleText t="StS Peer"></LocaleText>
+				</a>
 				<button class="titleBtn py-2 text-decoration-none btn text-primary-emphasis bg-primary-subtle rounded-3 border-1 border-primary-subtle "
 				        @click="configurationModals.editConfiguration.modalOpen = true"
 				        type="button" aria-expanded="false">
@@ -450,6 +461,13 @@ watch(() => route.query.id, (newValue) => {
 				@close="configurationModals.peerNew.modalOpen = false"
 				@addedPeers="configurationModals.peerNew.modalOpen = false; fetchPeerList()"
 			></PeerAddModal>
+		</Suspense>
+		<Suspense key="StSPeerModal">
+			<StSPeerModal
+				v-if="configurationModals.stsPeer.modalOpen"
+				@close="configurationModals.stsPeer.modalOpen = false"
+				@addedPeer="configurationModals.stsPeer.modalOpen = false; fetchPeerList()"
+			></StSPeerModal>
 		</Suspense>
 		<PeerJobsAllModal
 			key="PeerJobsAllModal"

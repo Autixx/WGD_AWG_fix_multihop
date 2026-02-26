@@ -11,7 +11,12 @@ import jinja2
 import sqlalchemy as db
 from .PeerJob import PeerJob
 from .PeerShareLink import PeerShareLink
-from .Utilities import GenerateWireguardPublicKey, ValidateIPAddressesWithRange, ValidateDNSAddress
+from .Utilities import (
+    GenerateWireguardPublicKey,
+    ValidateIPAddressesWithRange,
+    ValidateDNSAddress,
+    ValidatePeerEndpoint
+)
 
 
 class Peer:
@@ -52,7 +57,7 @@ class Peer:
     def updatePeer(self, name: str, private_key: str,
                    preshared_key: str,
                    dns_addresses: str, allowed_ip: str, endpoint_allowed_ip: str, mtu: int,
-                   keepalive: int) -> tuple[bool, str] or tuple[bool, None]:
+                   keepalive: int, remote_endpoint: str = "") -> tuple[bool, str] or tuple[bool, None]:
         if not self.configuration.getStatus():
             self.configuration.toggleConfiguration()
 
@@ -67,8 +72,12 @@ class Peer:
         if not ValidateIPAddressesWithRange(endpoint_allowed_ip):
             return False, f"Endpoint Allowed IPs format is incorrect"
         
-        if len(dns_addresses) > 0 and not ValidateDNSAddress(dns_addresses):
+        if len(dns_addresses) > 0 and not ValidateDNSAddress(dns_addresses)[0]:
             return False, f"DNS format is incorrect"
+
+        endpointStatus, endpointMessage = ValidatePeerEndpoint(remote_endpoint)
+        if not endpointStatus:
+            return False, endpointMessage
         
         if type(mtu) is str or mtu is None:
             mtu = 0
@@ -94,8 +103,13 @@ class Peer:
                 with open(uid, "w+") as f:
                     f.write(preshared_key)
             newAllowedIPs = allowed_ip.replace(" ", "")
+            peerSetCommand = f"{self.configuration.Protocol} set {self.configuration.Name} peer {self.id} allowed-ips {newAllowedIPs}"
+            if len((remote_endpoint or "").strip()) > 0:
+                peerSetCommand += f" endpoint {remote_endpoint.strip()}"
+            peerSetCommand += f" persistent-keepalive {keepalive}"
+            peerSetCommand += f" {f'preshared-key {uid}' if pskExist else 'preshared-key /dev/null'}"
             updateAllowedIp = subprocess.check_output(
-                f"{self.configuration.Protocol} set {self.configuration.Name} peer {self.id} allowed-ips {newAllowedIPs} {f'preshared-key {uid}' if pskExist else 'preshared-key /dev/null'}",
+                peerSetCommand,
                 shell=True, stderr=subprocess.STDOUT)
 
             if pskExist: os.remove(uid)
@@ -114,7 +128,8 @@ class Peer:
                         "endpoint_allowed_ip": endpoint_allowed_ip,
                         "mtu": mtu,
                         "keepalive": keepalive,
-                        "preshared_key": preshared_key
+                        "preshared_key": preshared_key,
+                        "remote_endpoint": remote_endpoint
                     }).where(
                         self.configuration.peersTable.c.id == self.id
                     )
@@ -177,7 +192,7 @@ class Peer:
                 self.configuration.configurationInfo.OverridePeerSettings.EndpointAllowedIPs
                     if self.configuration.configurationInfo.OverridePeerSettings.EndpointAllowedIPs else self.endpoint_allowed_ip
             ),
-            "Endpoint": f'{(self.configuration.configurationInfo.OverridePeerSettings.PeerRemoteEndpoint if self.configuration.configurationInfo.OverridePeerSettings.PeerRemoteEndpoint else self.configuration.DashboardConfig.GetConfig("Peers", "remote_endpoint")[1])}:{(self.configuration.configurationInfo.OverridePeerSettings.ListenPort if self.configuration.configurationInfo.OverridePeerSettings.ListenPort else self.configuration.ListenPort)}',
+            "Endpoint": "",
             "PersistentKeepalive": (
                 self.configuration.configurationInfo.OverridePeerSettings.PersistentKeepalive 
                 if self.configuration.configurationInfo.OverridePeerSettings.PersistentKeepalive
@@ -185,6 +200,25 @@ class Peer:
             ),
             "PresharedKey": self.preshared_key
         }
+
+        endpointHost = (
+            self.configuration.configurationInfo.OverridePeerSettings.PeerRemoteEndpoint
+            if self.configuration.configurationInfo.OverridePeerSettings.PeerRemoteEndpoint
+            else (self.remote_endpoint if self.remote_endpoint else self.configuration.DashboardConfig.GetConfig("Peers", "remote_endpoint")[1])
+        )
+        endpointPort = (
+            self.configuration.configurationInfo.OverridePeerSettings.ListenPort
+            if self.configuration.configurationInfo.OverridePeerSettings.ListenPort
+            else self.configuration.ListenPort
+        )
+        endpointHost = str(endpointHost).strip()
+        if re.match(r"^\[[0-9a-fA-F:]+\]:\d{1,5}$", endpointHost) or re.match(r"^[^:\s]+:\d{1,5}$", endpointHost):
+            peerSection["Endpoint"] = endpointHost
+        elif endpointHost:
+            if ":" in endpointHost and not endpointHost.startswith("["):
+                peerSection["Endpoint"] = f"[{endpointHost}]:{endpointPort}"
+            else:
+                peerSection["Endpoint"] = f"{endpointHost}:{endpointPort}"
         combine = [interfaceSection.items(), peerSection.items()]
         for s in range(len(combine)):
             if s == 0:
@@ -199,6 +233,19 @@ class Peer:
 
 
         if self.configuration.Protocol == "awg":
+            hostName = (
+                self.configuration.configurationInfo.OverridePeerSettings.PeerRemoteEndpoint
+                if self.configuration.configurationInfo.OverridePeerSettings.PeerRemoteEndpoint
+                else (self.remote_endpoint if self.remote_endpoint else self.configuration.DashboardConfig.GetConfig("Peers", "remote_endpoint")[1])
+            )
+            hostName = str(hostName).strip()
+            if hostName.startswith("["):
+                closing = hostName.find("]")
+                if closing > 0 and closing + 1 < len(hostName) and hostName[closing + 1] == ":":
+                    hostName = hostName[1:closing]
+            elif hostName.count(":") == 1:
+                hostName = hostName.rsplit(":", 1)[0]
+
             final["amneziaVPN"] = json.dumps({
                 "containers": [{
                     "awg": {
@@ -211,10 +258,7 @@ class Peer:
                 }],
                 "defaultContainer": "amnezia-awg",
                 "description": self.name,
-                "hostName": (
-                    self.configuration.configurationInfo.OverridePeerSettings.PeerRemoteEndpoint 
-                        if self.configuration.configurationInfo.OverridePeerSettings.PeerRemoteEndpoint 
-                        else self.configuration.DashboardConfig.GetConfig("Peers", "remote_endpoint")[1])
+                "hostName": hostName
             })
         return final
 

@@ -5,7 +5,12 @@ import subprocess
 import uuid
 
 from .Peer import Peer
-from .Utilities import ValidateIPAddressesWithRange, ValidateDNSAddress, GenerateWireguardPublicKey
+from .Utilities import (
+    ValidateIPAddressesWithRange,
+    ValidateDNSAddress,
+    GenerateWireguardPublicKey,
+    ValidatePeerEndpoint
+)
 
 
 class AmneziaWGPeer(Peer):
@@ -17,7 +22,7 @@ class AmneziaWGPeer(Peer):
     def updatePeer(self, name: str, private_key: str,
                    preshared_key: str,
                    dns_addresses: str, allowed_ip: str, endpoint_allowed_ip: str, mtu: int,
-                   keepalive: int, advanced_security: str) -> tuple[bool, str] or tuple[bool, None]:
+                   keepalive: int, remote_endpoint: str, advanced_security: str) -> tuple[bool, str] or tuple[bool, None]:
         if not self.configuration.getStatus():
             self.configuration.toggleConfiguration()
 
@@ -30,8 +35,11 @@ class AmneziaWGPeer(Peer):
             return False, "Allowed IP already taken by another peer"
         if not ValidateIPAddressesWithRange(endpoint_allowed_ip):
             return False, f"Endpoint Allowed IPs format is incorrect"
-        if len(dns_addresses) > 0 and not ValidateDNSAddress(dns_addresses):
+        if len(dns_addresses) > 0 and not ValidateDNSAddress(dns_addresses)[0]:
             return False, f"DNS format is incorrect"
+        endpointStatus, endpointMessage = ValidatePeerEndpoint(remote_endpoint)
+        if not endpointStatus:
+            return False, endpointMessage
 
         if type(mtu) is str:
             mtu = 0
@@ -58,8 +66,13 @@ class AmneziaWGPeer(Peer):
                 with open(uid, "w+") as f:
                     f.write(preshared_key)
             newAllowedIPs = allowed_ip.replace(" ", "")
+            peerSetCommand = f"{self.configuration.Protocol} set {self.configuration.Name} peer {self.id} allowed-ips {newAllowedIPs}"
+            if len((remote_endpoint or "").strip()) > 0:
+                peerSetCommand += f" endpoint {remote_endpoint.strip()}"
+            peerSetCommand += f" persistent-keepalive {keepalive}"
+            peerSetCommand += f" {f'preshared-key {uid}' if pskExist else 'preshared-key /dev/null'}"
             updateAllowedIp = subprocess.check_output(
-                f"{self.configuration.Protocol} set {self.configuration.Name} peer {self.id} allowed-ips {newAllowedIPs} {f'preshared-key {uid}' if pskExist else 'preshared-key /dev/null'}",
+                peerSetCommand,
                 shell=True, stderr=subprocess.STDOUT)
 
             if pskExist: os.remove(uid)
@@ -81,6 +94,7 @@ class AmneziaWGPeer(Peer):
                         "mtu": mtu,
                         "keepalive": keepalive,
                         "preshared_key": preshared_key,
+                        "remote_endpoint": remote_endpoint,
                         "advanced_security": advanced_security
                     }).where(
                         self.configuration.peersTable.c.id == self.id

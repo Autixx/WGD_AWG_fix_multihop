@@ -68,6 +68,45 @@ def ValidateEndpointAllowedIPs(IPs) -> tuple[bool, str] | tuple[bool, None]:
             return False, str(e)
     return True, None
 
+def ValidatePeerEndpoint(endpoint: str) -> tuple[bool, str] | tuple[bool, None]:
+    endpoint = (endpoint or "").strip()
+    if len(endpoint) == 0:
+        return True, None
+
+    host = ""
+    port = ""
+
+    if endpoint.startswith("["):
+        closing = endpoint.find("]")
+        if closing == -1 or closing + 2 > len(endpoint) or endpoint[closing + 1] != ":":
+            return False, "Endpoint format is incorrect. Use host:port or [ipv6]:port"
+        host = endpoint[1:closing]
+        port = endpoint[closing + 2:]
+    else:
+        if endpoint.count(":") == 1:
+            host, port = endpoint.rsplit(":", 1)
+        else:
+            return False, "Endpoint format is incorrect. Use host:port or [ipv6]:port"
+
+    if len(host.strip()) == 0 or len(port.strip()) == 0:
+        return False, "Endpoint format is incorrect. Use host:port or [ipv6]:port"
+
+    if not port.isdigit():
+        return False, "Endpoint port is invalid"
+
+    portNum = int(port)
+    if portNum < 1 or portNum > 65535:
+        return False, "Endpoint port is invalid"
+
+    if ValidateIPAddresses(host):
+        return True, None
+
+    # Basic FQDN validation
+    if RegexMatch(r"(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z][a-z]{0,61}[a-z]", host.lower()):
+        return True, None
+
+    return False, "Endpoint host is invalid"
+
 def GenerateWireguardPublicKey(privateKey: str) -> tuple[bool, str] | tuple[bool, None]:
     try:
         publicKey = subprocess.check_output(f"wg pubkey", input=privateKey.encode(), shell=True,
