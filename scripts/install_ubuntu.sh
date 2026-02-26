@@ -14,6 +14,17 @@ BOOTSTRAP_OUT_IF="${BOOTSTRAP_OUT_IF:-}"
 BOOTSTRAP_DNS="${BOOTSTRAP_DNS:-1.1.1.1,1.0.0.1}"
 BOOTSTRAP_FORCE="${BOOTSTRAP_FORCE:-false}"
 BOOTSTRAP_START="${BOOTSTRAP_START:-true}"
+AWG_JC="${AWG_JC:-0}"
+AWG_JMIN="${AWG_JMIN:-0}"
+AWG_JMAX="${AWG_JMAX:-0}"
+AWG_S1="${AWG_S1:-0}"
+AWG_S2="${AWG_S2:-0}"
+AWG_S3="${AWG_S3:-0}"
+AWG_S4="${AWG_S4:-0}"
+AWG_H1="${AWG_H1:-1}"
+AWG_H2="${AWG_H2:-2}"
+AWG_H3="${AWG_H3:-3}"
+AWG_H4="${AWG_H4:-4}"
 
 usage() {
   cat <<'EOF'
@@ -39,6 +50,17 @@ Options:
                            DNS pushed to peers by default template
   --bootstrap-force        Overwrite existing inbound config if it already exists
   --no-bootstrap-start     Create config but do not bring interface up
+  --awg-jc <num>           AWG2.0 Jc value (default: 0)
+  --awg-jmin <num>         AWG2.0 Jmin value (default: 0)
+  --awg-jmax <num>         AWG2.0 Jmax value (default: 0)
+  --awg-s1 <num>           AWG2.0 S1 value (default: 0)
+  --awg-s2 <num>           AWG2.0 S2 value (default: 0)
+  --awg-s3 <num>           AWG2.0 S3 value (default: 0)
+  --awg-s4 <num>           AWG2.0 S4 value (default: 0)
+  --awg-h1 <num>           AWG2.0 H1 value (default: 1)
+  --awg-h2 <num>           AWG2.0 H2 value (default: 2)
+  --awg-h3 <num>           AWG2.0 H3 value (default: 3)
+  --awg-h4 <num>           AWG2.0 H4 value (default: 4)
   -h, --help              Show help
 EOF
 }
@@ -54,6 +76,11 @@ validate_port() {
   ((value >= 1 && value <= 65535))
 }
 
+validate_int() {
+  local value="$1"
+  [[ "${value}" =~ ^-?[0-9]+$ ]]
+}
+
 create_bootstrap_inbound() {
   local interface_name="$1"
   local protocol="$2"
@@ -64,10 +91,24 @@ create_bootstrap_inbound() {
   local force="$7"
   local should_start="$8"
   local conf_dir conf_path quick_bin nat_subnet private_key public_key service_unit
+  local awg_jc="$9"
+  local awg_jmin="${10}"
+  local awg_jmax="${11}"
+  local awg_s1="${12}"
+  local awg_s2="${13}"
+  local awg_s3="${14}"
+  local awg_s4="${15}"
+  local awg_h1="${16}"
+  local awg_h2="${17}"
+  local awg_h3="${18}"
+  local awg_h4="${19}"
 
   [[ "${interface_name}" =~ ^[a-zA-Z0-9_.-]{1,15}$ ]] || fail "[bootstrap] Invalid interface name: ${interface_name}"
   [[ "${protocol}" == "wg" || "${protocol}" == "awg" ]] || fail "[bootstrap] Protocol must be wg or awg."
   validate_port "${listen_port}" || fail "[bootstrap] Invalid port: ${listen_port}"
+  for numeric in "${awg_jc}" "${awg_jmin}" "${awg_jmax}" "${awg_s1}" "${awg_s2}" "${awg_s3}" "${awg_s4}" "${awg_h1}" "${awg_h2}" "${awg_h3}" "${awg_h4}"; do
+    validate_int "${numeric}" || fail "[bootstrap] AWG parameters must be integer values."
+  done
 
   quick_bin="${protocol}-quick"
   command -v "${quick_bin}" >/dev/null 2>&1 || fail "[bootstrap] ${quick_bin} is not installed."
@@ -110,6 +151,21 @@ PostUp = iptables -t nat -A POSTROUTING -s ${nat_subnet} -o ${out_if} -j MASQUER
 PreDown = iptables -t nat -D POSTROUTING -s ${nat_subnet} -o ${out_if} -j MASQUERADE; iptables -D FORWARD -i ${interface_name} -j ACCEPT; iptables -D FORWARD -o ${interface_name} -j ACCEPT
 SaveConfig = false
 EOF
+  if [[ "${protocol}" == "awg" ]]; then
+    cat >> "${conf_path}" <<EOF
+Jc = ${awg_jc}
+Jmin = ${awg_jmin}
+Jmax = ${awg_jmax}
+S1 = ${awg_s1}
+S2 = ${awg_s2}
+S3 = ${awg_s3}
+S4 = ${awg_s4}
+H1 = ${awg_h1}
+H2 = ${awg_h2}
+H3 = ${awg_h3}
+H4 = ${awg_h4}
+EOF
+  fi
   chmod 600 "${conf_path}"
 
   cat > /etc/sysctl.d/99-wgd-forward.conf <<'EOF'
@@ -191,6 +247,50 @@ while [[ $# -gt 0 ]]; do
     --no-bootstrap-start)
       BOOTSTRAP_START="false"
       shift 1
+      ;;
+    --awg-jc)
+      AWG_JC="$2"
+      shift 2
+      ;;
+    --awg-jmin)
+      AWG_JMIN="$2"
+      shift 2
+      ;;
+    --awg-jmax)
+      AWG_JMAX="$2"
+      shift 2
+      ;;
+    --awg-s1)
+      AWG_S1="$2"
+      shift 2
+      ;;
+    --awg-s2)
+      AWG_S2="$2"
+      shift 2
+      ;;
+    --awg-s3)
+      AWG_S3="$2"
+      shift 2
+      ;;
+    --awg-s4)
+      AWG_S4="$2"
+      shift 2
+      ;;
+    --awg-h1)
+      AWG_H1="$2"
+      shift 2
+      ;;
+    --awg-h2)
+      AWG_H2="$2"
+      shift 2
+      ;;
+    --awg-h3)
+      AWG_H3="$2"
+      shift 2
+      ;;
+    --awg-h4)
+      AWG_H4="$2"
+      shift 2
       ;;
     -h|--help)
       usage
@@ -324,7 +424,18 @@ if [[ -n "${BOOTSTRAP_INBOUND}" ]]; then
     "${BOOTSTRAP_OUT_IF}" \
     "${BOOTSTRAP_DNS}" \
     "${BOOTSTRAP_FORCE}" \
-    "${BOOTSTRAP_START}"
+    "${BOOTSTRAP_START}" \
+    "${AWG_JC}" \
+    "${AWG_JMIN}" \
+    "${AWG_JMAX}" \
+    "${AWG_S1}" \
+    "${AWG_S2}" \
+    "${AWG_S3}" \
+    "${AWG_S4}" \
+    "${AWG_H1}" \
+    "${AWG_H2}" \
+    "${AWG_H3}" \
+    "${AWG_H4}"
 else
   echo "[bootstrap] skipped (use --bootstrap-inbound <name> to enable)"
 fi

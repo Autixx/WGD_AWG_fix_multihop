@@ -24,6 +24,24 @@ Example for AWG inbound:
 sudo bash scripts/install_ubuntu.sh --bootstrap-inbound awg0 --bootstrap-protocol awg --bootstrap-listen-port 51820
 ```
 
+AWG 2.0 bootstrap fields are supported (without legacy `I1..I5`).  
+Supported keys: `Jc`, `Jmin`, `Jmax`, `S1`, `S2`, `S3`, `S4`, `H1`, `H2`, `H3`, `H4`.
+
+Example with explicit AWG 2.0 values:
+
+```bash
+sudo bash scripts/install_ubuntu.sh \
+  --bootstrap-inbound awg0 \
+  --bootstrap-protocol awg \
+  --bootstrap-address 10.66.66.1/24 \
+  --bootstrap-listen-port 51820 \
+  --bootstrap-out-if ens3 \
+  --awg-jc 4 --awg-jmin 40 --awg-jmax 70 \
+  --awg-s1 20 --awg-s2 40 --awg-s3 80 --awg-s4 120 \
+  --awg-h1 1 --awg-h2 2 --awg-h3 3 --awg-h4 4 \
+  --bootstrap-force
+```
+
 After install:
 
 ```bash
