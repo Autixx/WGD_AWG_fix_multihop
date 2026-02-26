@@ -26,6 +26,7 @@ sudo bash scripts/install_ubuntu.sh --bootstrap-inbound awg0 --bootstrap-protoco
 
 AWG 2.0 bootstrap fields are supported (without legacy `I1..I5`).  
 Supported keys: `Jc`, `Jmin`, `Jmax`, `S1`, `S2`, `S3`, `S4`, `H1`, `H2`, `H3`, `H4`.
+If you do not pass `--awg-*` values, they are randomly generated for each new interface.
 
 Example with explicit AWG 2.0 values:
 

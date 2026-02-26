@@ -14,17 +14,17 @@ BOOTSTRAP_OUT_IF="${BOOTSTRAP_OUT_IF:-}"
 BOOTSTRAP_DNS="${BOOTSTRAP_DNS:-1.1.1.1,1.0.0.1}"
 BOOTSTRAP_FORCE="${BOOTSTRAP_FORCE:-false}"
 BOOTSTRAP_START="${BOOTSTRAP_START:-true}"
-AWG_JC="${AWG_JC:-0}"
-AWG_JMIN="${AWG_JMIN:-0}"
-AWG_JMAX="${AWG_JMAX:-0}"
-AWG_S1="${AWG_S1:-0}"
-AWG_S2="${AWG_S2:-0}"
-AWG_S3="${AWG_S3:-0}"
-AWG_S4="${AWG_S4:-0}"
-AWG_H1="${AWG_H1:-1}"
-AWG_H2="${AWG_H2:-2}"
-AWG_H3="${AWG_H3:-3}"
-AWG_H4="${AWG_H4:-4}"
+AWG_JC="${AWG_JC:-}"
+AWG_JMIN="${AWG_JMIN:-}"
+AWG_JMAX="${AWG_JMAX:-}"
+AWG_S1="${AWG_S1:-}"
+AWG_S2="${AWG_S2:-}"
+AWG_S3="${AWG_S3:-}"
+AWG_S4="${AWG_S4:-}"
+AWG_H1="${AWG_H1:-}"
+AWG_H2="${AWG_H2:-}"
+AWG_H3="${AWG_H3:-}"
+AWG_H4="${AWG_H4:-}"
 
 usage() {
   cat <<'EOF'
@@ -50,17 +50,17 @@ Options:
                            DNS pushed to peers by default template
   --bootstrap-force        Overwrite existing inbound config if it already exists
   --no-bootstrap-start     Create config but do not bring interface up
-  --awg-jc <num>           AWG2.0 Jc value (default: 0)
-  --awg-jmin <num>         AWG2.0 Jmin value (default: 0)
-  --awg-jmax <num>         AWG2.0 Jmax value (default: 0)
-  --awg-s1 <num>           AWG2.0 S1 value (default: 0)
-  --awg-s2 <num>           AWG2.0 S2 value (default: 0)
-  --awg-s3 <num>           AWG2.0 S3 value (default: 0)
-  --awg-s4 <num>           AWG2.0 S4 value (default: 0)
-  --awg-h1 <num>           AWG2.0 H1 value (default: 1)
-  --awg-h2 <num>           AWG2.0 H2 value (default: 2)
-  --awg-h3 <num>           AWG2.0 H3 value (default: 3)
-  --awg-h4 <num>           AWG2.0 H4 value (default: 4)
+  --awg-jc <num>           AWG2.0 Jc value (default: random)
+  --awg-jmin <num>         AWG2.0 Jmin value (default: random)
+  --awg-jmax <num>         AWG2.0 Jmax value (default: random)
+  --awg-s1 <num>           AWG2.0 S1 value (default: random)
+  --awg-s2 <num>           AWG2.0 S2 value (default: random)
+  --awg-s3 <num>           AWG2.0 S3 value (default: random)
+  --awg-s4 <num>           AWG2.0 S4 value (default: random)
+  --awg-h1 <num>           AWG2.0 H1 value (default: random)
+  --awg-h2 <num>           AWG2.0 H2 value (default: random)
+  --awg-h3 <num>           AWG2.0 H3 value (default: random)
+  --awg-h4 <num>           AWG2.0 H4 value (default: random)
   -h, --help              Show help
 EOF
 }
@@ -106,9 +106,46 @@ create_bootstrap_inbound() {
   [[ "${interface_name}" =~ ^[a-zA-Z0-9_.-]{1,15}$ ]] || fail "[bootstrap] Invalid interface name: ${interface_name}"
   [[ "${protocol}" == "wg" || "${protocol}" == "awg" ]] || fail "[bootstrap] Protocol must be wg or awg."
   validate_port "${listen_port}" || fail "[bootstrap] Invalid port: ${listen_port}"
-  for numeric in "${awg_jc}" "${awg_jmin}" "${awg_jmax}" "${awg_s1}" "${awg_s2}" "${awg_s3}" "${awg_s4}" "${awg_h1}" "${awg_h2}" "${awg_h3}" "${awg_h4}"; do
-    validate_int "${numeric}" || fail "[bootstrap] AWG parameters must be integer values."
-  done
+
+  if [[ "${protocol}" == "awg" ]]; then
+    local generated
+    generated="$(python3 - <<'PY'
+import random
+jmin = random.randint(20, 200)
+jmax = random.randint(jmin + 50, jmin + 1200)
+hashes = random.sample(range(1, (2 ** 31) - 1), 4)
+print(
+    random.randint(3, 15),
+    jmin,
+    jmax,
+    random.randint(0, 255),
+    random.randint(0, 255),
+    random.randint(0, 255),
+    random.randint(0, 255),
+    hashes[0], hashes[1], hashes[2], hashes[3]
+)
+PY
+)"
+    local g_jc g_jmin g_jmax g_s1 g_s2 g_s3 g_s4 g_h1 g_h2 g_h3 g_h4
+    read -r g_jc g_jmin g_jmax g_s1 g_s2 g_s3 g_s4 g_h1 g_h2 g_h3 g_h4 <<< "${generated}"
+
+    [[ -z "${awg_jc}" ]] && awg_jc="${g_jc}"
+    [[ -z "${awg_jmin}" ]] && awg_jmin="${g_jmin}"
+    [[ -z "${awg_jmax}" ]] && awg_jmax="${g_jmax}"
+    [[ -z "${awg_s1}" ]] && awg_s1="${g_s1}"
+    [[ -z "${awg_s2}" ]] && awg_s2="${g_s2}"
+    [[ -z "${awg_s3}" ]] && awg_s3="${g_s3}"
+    [[ -z "${awg_s4}" ]] && awg_s4="${g_s4}"
+    [[ -z "${awg_h1}" ]] && awg_h1="${g_h1}"
+    [[ -z "${awg_h2}" ]] && awg_h2="${g_h2}"
+    [[ -z "${awg_h3}" ]] && awg_h3="${g_h3}"
+    [[ -z "${awg_h4}" ]] && awg_h4="${g_h4}"
+
+    for numeric in "${awg_jc}" "${awg_jmin}" "${awg_jmax}" "${awg_s1}" "${awg_s2}" "${awg_s3}" "${awg_s4}" "${awg_h1}" "${awg_h2}" "${awg_h3}" "${awg_h4}"; do
+      validate_int "${numeric}" || fail "[bootstrap] AWG parameters must be integer values."
+    done
+    ((awg_jmax > awg_jmin)) || fail "[bootstrap] AWG Jmax must be greater than Jmin."
+  fi
 
   quick_bin="${protocol}-quick"
   command -v "${quick_bin}" >/dev/null 2>&1 || fail "[bootstrap] ${quick_bin} is not installed."
@@ -192,6 +229,9 @@ EOF
   echo "  Address:    ${address_cidr}"
   echo "  NAT via:    ${out_if}"
   echo "  PublicKey:  ${public_key}"
+  if [[ "${protocol}" == "awg" ]]; then
+    echo "  AWG2.0:     Jc=${awg_jc} Jmin=${awg_jmin} Jmax=${awg_jmax} S1=${awg_s1} S2=${awg_s2} S3=${awg_s3} S4=${awg_s4} H1=${awg_h1} H2=${awg_h2} H3=${awg_h3} H4=${awg_h4}"
+  fi
 }
 
 while [[ $# -gt 0 ]]; do

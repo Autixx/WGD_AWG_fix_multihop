@@ -38,17 +38,17 @@ export default {
 				PostDown: "",
 				Table: "",
 				Protocol: "wg",
-				Jc: 5,
-				Jmin: 49,
-				Jmax: 998,
-				S1: 17,
-				S2: 110,
-				S3: 0,
-				S4: 0,
-				H1: 0,
-				H2: 0,
-				H3: 0,
-				H4: 0
+				Jc: "",
+				Jmin: "",
+				Jmax: "",
+				S1: "",
+				S2: "",
+				S3: "",
+				S4: "",
+				H1: "",
+				H2: "",
+				H3: "",
+				H4: ""
 			},
 			numberOfAvailableIPs: "0",
 			error: false,
@@ -61,18 +61,46 @@ export default {
 	},
 	created() {
 		this.wireguardGenerateKeypair();
-		let hValue = []
-		while ([...new Set(hValue)].length !== 4){
-			hValue = [this.rand(1, (2**31) - 1), this.rand(1, (2**31) - 1), this.rand(1, (2**31) - 1), this.rand(1, (2**31) - 1)]
-		}
-		this.newConfiguration.H1 = hValue[0]
-		this.newConfiguration.H2 = hValue[1]
-		this.newConfiguration.H3 = hValue[2]
-		this.newConfiguration.H4 = hValue[3]
+		this.generateAwgParameters();
 	},
 	methods: {
 		rand(min, max){
-			return Math.floor(Math.random() * (max - min) + min);
+			const minCeil = Math.ceil(min);
+			const maxFloor = Math.floor(max);
+			const delta = maxFloor - minCeil + 1;
+			if (delta <= 0){
+				return minCeil;
+			}
+			if (window.crypto?.getRandomValues){
+				const arr = new Uint32Array(1);
+				window.crypto.getRandomValues(arr);
+				return minCeil + (arr[0] % delta);
+			}
+			return Math.floor(Math.random() * delta) + minCeil;
+		},
+		generateAwgParameters(){
+			const jmin = this.rand(20, 200);
+			const jmax = this.rand(jmin + 50, jmin + 1200);
+			let hValue = [];
+			while ([...new Set(hValue)].length !== 4){
+				hValue = [
+					this.rand(1, (2**31) - 1),
+					this.rand(1, (2**31) - 1),
+					this.rand(1, (2**31) - 1),
+					this.rand(1, (2**31) - 1)
+				]
+			}
+			this.newConfiguration.Jc = this.rand(3, 15)
+			this.newConfiguration.Jmin = jmin
+			this.newConfiguration.Jmax = jmax
+			this.newConfiguration.S1 = this.rand(0, 255)
+			this.newConfiguration.S2 = this.rand(0, 255)
+			this.newConfiguration.S3 = this.rand(0, 255)
+			this.newConfiguration.S4 = this.rand(0, 255)
+			this.newConfiguration.H1 = hValue[0]
+			this.newConfiguration.H2 = hValue[1]
+			this.newConfiguration.H3 = hValue[2]
+			this.newConfiguration.H4 = hValue[3]
 		},
 		wireguardGenerateKeypair(){
 			const wg = window.wireguard.generateKeypair();
@@ -192,6 +220,11 @@ export default {
 				}catch (e) {
 					ele.classList.add("is-invalid")
 				}
+			}
+		},
+		'newConfiguration.Protocol'(newVal, oldVal){
+			if (newVal === 'awg' && oldVal !== 'awg' && !this.parseInterfaceResult){
+				this.generateAwgParameters()
 			}
 		}
 	},
@@ -379,13 +412,23 @@ export default {
 									</div>
 								</div>
 
-								<div class="card rounded-3" 
-								     v-if="this.newConfiguration.Protocol === 'awg'"
-								     v-for="key in ['Jc', 'Jmin', 'Jmax', 'S1', 'S2', 'S3', 'S4', 'H1', 'H2', 'H3', 'H4']">
-									<div class="card-header">{{ key }}</div>
-									<div class="card-body">
-										<input type="text"
-										       class="form-control font-monospace" :id="key" v-model="this.newConfiguration[key]">
+								<div v-if="this.newConfiguration.Protocol === 'awg'" class="d-flex flex-column gap-3">
+									<div class="d-flex align-items-center">
+										<strong>AWG 2.0</strong>
+										<button class="btn btn-outline-primary btn-sm ms-auto"
+										        type="button"
+										        @click="generateAwgParameters()">
+											<i class="bi bi-arrow-repeat me-2"></i>
+											<LocaleText t="Generate"></LocaleText>
+										</button>
+									</div>
+									<div class="card rounded-3"
+									     v-for="key in ['Jc', 'Jmin', 'Jmax', 'S1', 'S2', 'S3', 'S4', 'H1', 'H2', 'H3', 'H4']">
+										<div class="card-header">{{ key }}</div>
+										<div class="card-body">
+											<input type="text"
+											       class="form-control font-monospace" :id="key" v-model="this.newConfiguration[key]">
+										</div>
 									</div>
 								</div>
 							</div>

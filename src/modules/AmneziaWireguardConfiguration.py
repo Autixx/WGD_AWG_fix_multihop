@@ -12,22 +12,43 @@ from .DashboardWebHooks import DashboardWebHooks
 
 
 class AmneziaWireguardConfiguration(WireguardConfiguration):
+    @staticmethod
+    def GenerateRandomAWG2Parameters() -> dict:
+        # AWG 2.0 random defaults for new interfaces.
+        jmin = random.randint(20, 200)
+        jmax = random.randint(jmin + 50, jmin + 1200)
+        hashes = random.sample(range(1, (2 ** 31) - 1), 4)
+        return {
+            "Jc": random.randint(3, 15),
+            "Jmin": jmin,
+            "Jmax": jmax,
+            "S1": random.randint(0, 255),
+            "S2": random.randint(0, 255),
+            "S3": random.randint(0, 255),
+            "S4": random.randint(0, 255),
+            "H1": hashes[0],
+            "H2": hashes[1],
+            "H3": hashes[2],
+            "H4": hashes[3]
+        }
+
     def __init__(self, DashboardConfig,
                  AllPeerJobs: PeerJobs,
                  AllPeerShareLinks: PeerShareLinks,
                  DashboardWebHooks: DashboardWebHooks,
                  name: str = None, data: dict = None, backup: dict = None, startup: bool = False):
-        self.Jc = 0
-        self.Jmin = 0
-        self.Jmax = 0
-        self.S1 = 0
-        self.S2 = 0
-        self.S3 = 0
-        self.S4 = 0
-        self.H1 = 1
-        self.H2 = 2
-        self.H3 = 3
-        self.H4 = 4
+        random_params = self.GenerateRandomAWG2Parameters()
+        self.Jc = random_params["Jc"]
+        self.Jmin = random_params["Jmin"]
+        self.Jmax = random_params["Jmax"]
+        self.S1 = random_params["S1"]
+        self.S2 = random_params["S2"]
+        self.S3 = random_params["S3"]
+        self.S4 = random_params["S4"]
+        self.H1 = random_params["H1"]
+        self.H2 = random_params["H2"]
+        self.H3 = random_params["H3"]
+        self.H4 = random_params["H4"]
 
         super().__init__(DashboardConfig, AllPeerJobs, AllPeerShareLinks, DashboardWebHooks, name, data, backup, startup, wg=False)
 
