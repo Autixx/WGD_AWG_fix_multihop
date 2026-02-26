@@ -91,6 +91,106 @@ validate_int() {
   [[ "${value}" =~ ^-?[0-9]+$ ]]
 }
 
+version_ge() {
+  local left="$1"
+  local right="$2"
+  python3 - "$left" "$right" <<'PY'
+import re, sys
+
+def parse(v: str):
+    parts = [int(x) for x in re.findall(r'\d+', v)]
+    while len(parts) < 3:
+        parts.append(0)
+    return tuple(parts[:3])
+
+print(0 if parse(sys.argv[1]) >= parse(sys.argv[2]) else 1)
+PY
+}
+
+ensure_go_toolchain() {
+  local min_version="$1"
+  local current_version=""
+  local arch go_arch download_version download_url tarball
+
+  if command -v go >/dev/null 2>&1; then
+    current_version="$(go version | awk '{print $3}' | sed 's/^go//')"
+    if [[ "$(version_ge "${current_version}" "${min_version}")" == "0" ]]; then
+      echo "[awg] Go toolchain is compatible (${current_version})."
+      return
+    fi
+  fi
+
+  case "$(uname -m)" in
+    x86_64|amd64)
+      go_arch="amd64"
+      ;;
+    aarch64|arm64)
+      go_arch="arm64"
+      ;;
+    *)
+      fail "[awg] Unsupported CPU architecture for auto Go install: $(uname -m)"
+      ;;
+  esac
+
+  download_version="$(python3 - "${min_version}" "${go_arch}" <<'PY'
+import json, re, sys, urllib.request
+
+min_version = sys.argv[1]
+arch = sys.argv[2]
+major_minor = ".".join(min_version.split(".")[:2])
+
+def as_tuple(v: str):
+    nums = [int(x) for x in re.findall(r"\d+", v)]
+    while len(nums) < 3:
+        nums.append(0)
+    return tuple(nums[:3])
+
+with urllib.request.urlopen("https://go.dev/dl/?mode=json&include=all", timeout=30) as r:
+    releases = json.loads(r.read().decode("utf-8"))
+
+candidates = []
+for rel in releases:
+    tag = rel.get("version", "")
+    if not tag.startswith("go"):
+        continue
+    v = tag[2:]
+    if not v.startswith(major_minor + "."):
+        continue
+    for f in rel.get("files", []):
+        if f.get("os") == "linux" and f.get("arch") == arch and f.get("kind") == "archive" and f.get("filename", "").endswith(".tar.gz"):
+            candidates.append(v)
+            break
+
+if not candidates:
+    print("")
+else:
+    candidates.sort(key=as_tuple, reverse=True)
+    print(candidates[0])
+PY
+)"
+
+  if [[ -z "${download_version}" ]]; then
+    fail "[awg] Could not resolve Go download version for required ${min_version}."
+  fi
+
+  download_url="https://go.dev/dl/go${download_version}.linux-${go_arch}.tar.gz"
+  tarball="/tmp/go${download_version}.linux-${go_arch}.tar.gz"
+
+  echo "[awg] Installing Go ${download_version} from ${download_url}"
+  curl -fsSL "${download_url}" -o "${tarball}"
+  rm -rf /usr/local/go
+  tar -C /usr/local -xzf "${tarball}"
+  rm -f "${tarball}"
+  ln -sf /usr/local/go/bin/go /usr/local/bin/go
+  ln -sf /usr/local/go/bin/gofmt /usr/local/bin/gofmt
+  export PATH="/usr/local/go/bin:/usr/local/bin:${PATH}"
+
+  current_version="$(go version | awk '{print $3}' | sed 's/^go//')"
+  if [[ "$(version_ge "${current_version}" "${min_version}")" != "0" ]]; then
+    fail "[awg] Go install failed. Current version ${current_version}, required ${min_version}."
+  fi
+}
+
 sync_git_checkout() {
   local repo_url="$1"
   local git_ref="$2"
@@ -112,7 +212,7 @@ sync_git_checkout() {
 install_awg_stack() {
   local tools_missing="false"
   local go_missing="false"
-  local build_root tools_dir go_dir make_jobs
+  local build_root tools_dir go_dir make_jobs required_go
 
   if ! command -v awg >/dev/null 2>&1 || ! command -v awg-quick >/dev/null 2>&1; then
     tools_missing="true"
@@ -127,7 +227,6 @@ install_awg_stack() {
   fi
 
   echo "[awg] Installing missing AWG components from source..."
-  apt-get install -y golang-go
 
   make_jobs="$(nproc 2>/dev/null || echo 1)"
   build_root="$(mktemp -d /tmp/wgd-awg-build.XXXXXX)"
@@ -147,6 +246,9 @@ install_awg_stack() {
     if [[ -f "${go_dir}/go.mod" ]]; then
       sed -E -i 's/^go ([0-9]+\.[0-9]+)\.[0-9]+$/go \1/' "${go_dir}/go.mod"
     fi
+    required_go="$(awk '/^go /{print $2; exit}' "${go_dir}/go.mod")"
+    [[ -z "${required_go}" ]] && required_go="1.24"
+    ensure_go_toolchain "${required_go}"
     make -C "${go_dir}" -j"${make_jobs}" install
   fi
 
