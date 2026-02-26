@@ -4,7 +4,7 @@ WireGuard Configuration
 from typing import Any
 
 import jinja2
-import sqlalchemy, random, shutil, configparser, ipaddress, os, subprocess, time, re, uuid, psutil, traceback
+import sqlalchemy, random, shutil, configparser, ipaddress, os, subprocess, time, re, uuid, psutil, traceback, hashlib
 import shlex
 from zipfile import ZipFile
 from datetime import datetime, timedelta
@@ -1267,8 +1267,22 @@ class WireguardConfiguration:
             return []
         return [x.strip() for x in networks.split(",") if x.strip()]
 
+    def __parseGeoDirectCountries(self, countriesRaw: str) -> tuple[bool, list[str], str | None]:
+        countries = []
+        for country in str(countriesRaw).split(","):
+            cc = country.strip().lower()
+            if len(cc) == 0:
+                continue
+            if not RegexMatch(r"^[a-z]{2}$", cc):
+                return False, [], f"Invalid GeoIP country code: {country}"
+            if cc not in countries:
+                countries.append(cc)
+        if len(countries) == 0:
+            return False, [], "GeoIP countries list cannot be empty"
+        return True, countries, None
+
     def __validateMultiHopConfiguration(self, multiHop: MultiHopConfigurationClass) -> tuple[bool, str | None, str | None]:
-        if not multiHop.Enabled and not multiHop.LocalDNSInstalled:
+        if not multiHop.Enabled and not multiHop.LocalDNSInstalled and not multiHop.GeoDirectEnabled:
             return True, None, None
 
         if multiHop.Enabled:
@@ -1307,6 +1321,20 @@ class WireguardConfiguration:
             if tableID == 0 or rulePriority == 0 or firewallMark == 0:
                 return False, "Table ID, rule priority and firewall mark must be greater than zero", None
 
+        if multiHop.GeoDirectEnabled:
+            if not multiHop.Enabled:
+                return False, "GeoIP direct routing requires multi-hop to be enabled", "GeoDirectEnabled"
+            status, _, msg = self.__parseGeoDirectCountries(multiHop.GeoDirectCountries)
+            if not status:
+                return False, msg, "GeoDirectCountries"
+            sourceTemplate = multiHop.GeoDirectSourceTemplate.strip()
+            if len(sourceTemplate) == 0:
+                return False, "GeoIP source template cannot be empty", "GeoDirectSourceTemplate"
+            if "{country}" not in sourceTemplate:
+                return False, "GeoIP source template must contain {country} placeholder", "GeoDirectSourceTemplate"
+            if not RegexMatch(r"^https?://", sourceTemplate):
+                return False, "GeoIP source template must start with http:// or https://", "GeoDirectSourceTemplate"
+
         if multiHop.LocalDNSInstalled:
             localDNSAddress = multiHop.LocalDNSAddress.strip()
             if len(localDNSAddress) == 0:
@@ -1335,13 +1363,49 @@ class WireguardConfiguration:
             firewallMark = int(str(multiHop.FirewallMark).strip())
             routedNetworks = self.__splitNetworks(multiHop.RoutedNetworks)
             excludedNetworks = self.__splitNetworks(multiHop.ExcludedNetworks)
+            geoDirectEnabled = bool(multiHop.GeoDirectEnabled)
+            geoDirectCountries = []
+            geoSourceTemplate = multiHop.GeoDirectSourceTemplate.strip()
+            if geoDirectEnabled:
+                _, geoDirectCountries, _ = self.__parseGeoDirectCountries(multiHop.GeoDirectCountries)
+            objectHash = hashlib.sha1(self.Name.encode("utf-8")).hexdigest()[:10]
+            geoSetName = f"wgd_geo_{objectHash}"
+            geoChainName = f"WGDGEO{objectHash.upper()}"
 
             postUpCommands.extend([
                 "sysctl -w net.ipv4.ip_forward=1 >/dev/null",
-                (f"iptables -t mangle -C PREROUTING -i {inboundInterface} -j MARK --set-mark {firewallMark} >/dev/null 2>&1 "
-                 f"|| iptables -t mangle -A PREROUTING -i {inboundInterface} -j MARK --set-mark {firewallMark}"),
                 f"ip rule add fwmark {firewallMark} table {tableID} priority {rulePriority} >/dev/null 2>&1 || true"
             ])
+            if geoDirectEnabled:
+                postUpCommands.extend([
+                    f"ipset create {geoSetName} hash:net family inet -exist",
+                    f"ipset flush {geoSetName}"
+                ])
+                for country in geoDirectCountries:
+                    sourceURL = shlex.quote(geoSourceTemplate.replace("{country}", country))
+                    postUpCommands.append(
+                        f"curl -fsSL {sourceURL} | grep -E '^[0-9.]+/[0-9]+$' | xargs -r -n1 ipset add {geoSetName} -exist"
+                    )
+                postUpCommands.extend([
+                    f"iptables -t mangle -N {geoChainName} >/dev/null 2>&1 || true",
+                    f"iptables -t mangle -F {geoChainName}",
+                    f"iptables -t mangle -A {geoChainName} -m set --match-set {geoSetName} dst -j RETURN",
+                    f"iptables -t mangle -A {geoChainName} -j MARK --set-mark {firewallMark}",
+                    (f"iptables -t mangle -C PREROUTING -i {inboundInterface} -j {geoChainName} >/dev/null 2>&1 "
+                     f"|| iptables -t mangle -A PREROUTING -i {inboundInterface} -j {geoChainName}")
+                ])
+                postDownCommands.extend([
+                    f"iptables -t mangle -D PREROUTING -i {inboundInterface} -j {geoChainName} >/dev/null 2>&1 || true",
+                    f"iptables -t mangle -F {geoChainName} >/dev/null 2>&1 || true",
+                    f"iptables -t mangle -X {geoChainName} >/dev/null 2>&1 || true",
+                    f"ipset flush {geoSetName} >/dev/null 2>&1 || true",
+                    f"ipset destroy {geoSetName} >/dev/null 2>&1 || true"
+                ])
+            else:
+                postUpCommands.append(
+                    (f"iptables -t mangle -C PREROUTING -i {inboundInterface} -j MARK --set-mark {firewallMark} >/dev/null 2>&1 "
+                     f"|| iptables -t mangle -A PREROUTING -i {inboundInterface} -j MARK --set-mark {firewallMark}")
+                )
 
             for network in routedNetworks:
                 quotedNetwork = shlex.quote(network)
@@ -1378,10 +1442,13 @@ class WireguardConfiguration:
                     f"iptables -t nat -D POSTROUTING -o {outboundInterface} -j MASQUERADE >/dev/null 2>&1 || true"
                 )
 
-            postDownCommands.extend([
-                f"ip rule del fwmark {firewallMark} table {tableID} priority {rulePriority} >/dev/null 2>&1 || true",
-                f"iptables -t mangle -D PREROUTING -i {inboundInterface} -j MARK --set-mark {firewallMark} >/dev/null 2>&1 || true"
-            ])
+            postDownCommands.append(
+                f"ip rule del fwmark {firewallMark} table {tableID} priority {rulePriority} >/dev/null 2>&1 || true"
+            )
+            if not geoDirectEnabled:
+                postDownCommands.append(
+                    f"iptables -t mangle -D PREROUTING -i {inboundInterface} -j MARK --set-mark {firewallMark} >/dev/null 2>&1 || true"
+                )
 
         if multiHop.LocalDNSInstalled:
             localDNSAddress = multiHop.LocalDNSAddress.strip()

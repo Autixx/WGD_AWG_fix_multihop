@@ -26,6 +26,9 @@ class MultiHopConfigurationClass(BaseModel):
     FirewallMark: int | str = 51820
     EnableMasquerade: bool = True
     AutoSetInterfaceTableOff: bool = True
+    GeoDirectEnabled: bool = False
+    GeoDirectCountries: str = ''
+    GeoDirectSourceTemplate: str = 'https://www.ipdeny.com/ipblocks/data/aggregated/{country}-aggregated.zone'
     LocalDNSInstalled: bool = False
     LocalDNSAddress: str = ''
 

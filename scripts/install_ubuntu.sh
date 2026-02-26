@@ -579,6 +579,7 @@ apt-get install -y \
   curl \
   git \
   iproute2 \
+  ipset \
   iptables \
   net-tools \
   python3 \
