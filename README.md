@@ -69,3 +69,13 @@ After install:
 systemctl status wg-dashboard.service --no-pager
 journalctl -u wg-dashboard.service -f
 ```
+
+## MultiHop GeoIP Direct (backend)
+
+MultiHop supports GeoIP direct routing via `ipset`:
+- `GeoDirectEnabled`: enable/disable GeoIP direct mode
+- `GeoDirectCountries`: comma-separated ISO country codes (example: `ru,kz`)
+- `GeoDirectSourceTemplate`: URL template with `{country}` placeholder  
+  default: `https://www.ipdeny.com/ipblocks/data/aggregated/{country}-aggregated.zone`
+
+When enabled, destination CIDRs for selected countries are loaded into `ipset` and traffic to them is kept on the main route (direct), while the rest follows MultiHop routing.
