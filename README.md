@@ -12,6 +12,18 @@ cd WGD_AWG_fix_multihop
 sudo bash scripts/install_ubuntu.sh
 ```
 
+One-command deploy with ready inbound `wg0` (keys + NAT + interface up):
+
+```bash
+sudo bash scripts/install_ubuntu.sh --bootstrap-inbound wg0
+```
+
+Example for AWG inbound:
+
+```bash
+sudo bash scripts/install_ubuntu.sh --bootstrap-inbound awg0 --bootstrap-protocol awg --bootstrap-listen-port 51820
+```
+
 After install:
 
 ```bash
