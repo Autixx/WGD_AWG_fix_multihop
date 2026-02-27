@@ -1572,6 +1572,76 @@ class WireguardConfiguration:
         postUpCommands.append(self.__multiHopEndMarker())
         return postUpCommands, postDownCommands
 
+    def __getInterfacePeerAllowedNetworks(self, interfaceName: str) -> list[ipaddress._BaseNetwork]:
+        networks: list[ipaddress._BaseNetwork] = []
+        try:
+            output = subprocess.check_output(
+                f"{self.Protocol} show {interfaceName} allowed-ips",
+                shell=True,
+                stderr=subprocess.STDOUT
+            ).decode("utf-8", errors="ignore")
+        except Exception:
+            return networks
+
+        for line in output.splitlines():
+            line = line.strip()
+            if len(line) == 0:
+                continue
+            parts = line.split(None, 1)
+            if len(parts) < 2:
+                continue
+            allowedRaw = parts[1].replace(" ", "")
+            for item in allowedRaw.split(","):
+                item = item.strip()
+                if len(item) == 0 or item == "(none)":
+                    continue
+                try:
+                    networks.append(ipaddress.ip_network(item, strict=False))
+                except ValueError:
+                    continue
+        return networks
+
+    def __validateOutboundPeerCoverage(self, multiHop: MultiHopConfigurationClass) -> tuple[bool, str | None]:
+        outboundInterface = multiHop.OutboundInterface.strip()
+        if len(outboundInterface) == 0:
+            return False, "Outbound interface is required when multi-hop is enabled"
+
+        requiredNetworks = []
+        for network in self.__splitNetworks(multiHop.RoutedNetworks):
+            try:
+                requiredNetworks.append(ipaddress.ip_network(network, strict=False))
+            except ValueError:
+                # Routed networks validation is already handled elsewhere.
+                continue
+
+        peerNetworks = self.__getInterfacePeerAllowedNetworks(outboundInterface)
+        if len(peerNetworks) == 0:
+            return False, (
+                f"Outbound interface {outboundInterface} has no active peers or AllowedIPs. "
+                f"Create/update peer on {outboundInterface} and include Routed Networks in AllowedIPs."
+            )
+
+        missingNetworks = []
+        for required in requiredNetworks:
+            covered = False
+            for peerNetwork in peerNetworks:
+                if peerNetwork.version != required.version:
+                    continue
+                if required.subnet_of(peerNetwork):
+                    covered = True
+                    break
+            if not covered:
+                missingNetworks.append(str(required))
+
+        if len(missingNetworks) > 0:
+            return False, (
+                f"Outbound peer AllowedIPs on {outboundInterface} do not cover Routed Networks: "
+                f"{', '.join(missingNetworks)}. "
+                f"Example: for full tunnel set peer AllowedIPs to 0.0.0.0/0."
+            )
+
+        return True, None
+
     def getMultiHopPreview(self, newValue: dict[str, Any] | None = None) -> tuple[bool, str | None, dict[str, Any] | None]:
         try:
             multiHop = (
@@ -1624,6 +1694,12 @@ class WireguardConfiguration:
             return False, msg, preview
         if preview is None:
             return False, "Failed to build multi-hop preview", None
+
+        multiHop = self.configurationInfo.MultiHop
+        if multiHop.Enabled:
+            status, coverageMessage = self.__validateOutboundPeerCoverage(multiHop)
+            if not status:
+                return False, coverageMessage, {"Key": "OutboundInterface"}
 
         newData = self.toJson()
         newData["PostUp"] = preview["Result"]["PostUp"]
