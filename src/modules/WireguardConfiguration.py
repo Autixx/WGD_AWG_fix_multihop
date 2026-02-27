@@ -1224,10 +1224,10 @@ class WireguardConfiguration:
             return False
         
     def __multiHopStartMarker(self) -> str:
-        return f": # WGDashboard-MultiHop-START-{self.Name}"
+        return f"echo WGDashboard-MultiHop-START-{self.Name} >/dev/null"
 
     def __multiHopEndMarker(self) -> str:
-        return f": # WGDashboard-MultiHop-END-{self.Name}"
+        return f"echo WGDashboard-MultiHop-END-{self.Name} >/dev/null"
 
     def __splitCommandChain(self, commandChain: str) -> list[str]:
         if not commandChain:
@@ -1238,16 +1238,18 @@ class WireguardConfiguration:
         return "; ".join([x.strip() for x in commands if x.strip()])
 
     def __stripManagedMultiHopBlock(self, commandChain: str) -> list[str]:
-        startMarker = self.__multiHopStartMarker()
-        endMarker = self.__multiHopEndMarker()
         commands = self.__splitCommandChain(commandChain)
         result = []
         inManagedBlock = False
+        startToken = f"WGDashboard-MultiHop-START-{self.Name}"
+        endToken = f"WGDashboard-MultiHop-END-{self.Name}"
         for command in commands:
-            if command == startMarker:
+            # Backward compatible with old marker style `: # WGDashboard-MultiHop-...`
+            # and new non-comment marker style `echo WGDashboard-MultiHop-... >/dev/null`.
+            if startToken in command:
                 inManagedBlock = True
                 continue
-            if command == endMarker:
+            if endToken in command:
                 inManagedBlock = False
                 continue
             if not inManagedBlock:
