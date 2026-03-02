@@ -25,6 +25,11 @@ class NodeStatusValue(StrEnum):
     OFFLINE = "offline"
 
 
+class NodeSecretKindValue(StrEnum):
+    SSH_PASSWORD = "ssh_password"
+    SSH_PRIVATE_KEY = "ssh_private_key"
+
+
 class NodeCreate(BaseModel):
     name: str = Field(min_length=1, max_length=128)
     role: NodeRoleValue = NodeRoleValue.MIXED
@@ -64,3 +69,33 @@ class NodeRead(ONXBaseModel):
     last_seen_at: datetime | None
     created_at: datetime
     updated_at: datetime
+
+
+class NodeSecretUpsert(BaseModel):
+    kind: NodeSecretKindValue
+    value: str = Field(min_length=1)
+
+
+class NodeSecretRead(ONXBaseModel):
+    id: str
+    node_id: str
+    kind: NodeSecretKindValue
+    secret_ref: str
+    is_active: bool
+    created_at: datetime
+    updated_at: datetime
+
+
+class NodeCapabilityRead(ONXBaseModel):
+    id: str
+    node_id: str
+    capability_name: str
+    supported: bool
+    details_json: dict
+    checked_at: datetime
+
+
+class NodeDiscoverResponse(ONXBaseModel):
+    node: NodeRead
+    interfaces: list[str]
+    capabilities: list[NodeCapabilityRead]

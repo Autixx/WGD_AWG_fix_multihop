@@ -4,10 +4,24 @@ from sqlalchemy.orm import Session
 
 from onx.api.deps import get_database_session
 from onx.db.models.node import Node
-from onx.schemas.nodes import NodeCreate, NodeRead, NodeUpdate
+from onx.db.models.node_capability import NodeCapability
+from onx.db.models.node_secret import NodeSecretKind
+from onx.schemas.nodes import (
+    NodeCapabilityRead,
+    NodeCreate,
+    NodeDiscoverResponse,
+    NodeRead,
+    NodeSecretRead,
+    NodeSecretUpsert,
+    NodeUpdate,
+)
+from onx.services.discovery_service import DiscoveryService
+from onx.services.secret_service import SecretService
 
 
 router = APIRouter(prefix="/nodes", tags=["nodes"])
+secret_service = SecretService()
+discovery_service = DiscoveryService()
 
 
 @router.get("", response_model=list[NodeRead])
@@ -60,3 +74,78 @@ def update_node(node_id: str, payload: NodeUpdate, db: Session = Depends(get_dat
     db.commit()
     db.refresh(node)
     return node
+
+
+@router.put("/{node_id}/secret", response_model=NodeSecretRead)
+def upsert_node_secret(
+    node_id: str,
+    payload: NodeSecretUpsert,
+    db: Session = Depends(get_database_session),
+) -> NodeSecretRead:
+    node = db.get(Node, node_id)
+    if node is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Node not found.")
+
+    expected_kind = (
+        NodeSecretKind.SSH_PASSWORD
+        if node.auth_type.value == "password"
+        else NodeSecretKind.SSH_PRIVATE_KEY
+    )
+    if payload.kind.value != expected_kind.value:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Node auth_type is '{node.auth_type.value}', expected secret kind '{expected_kind.value}'.",
+        )
+
+    secret = secret_service.upsert_node_secret(db, node.id, expected_kind, payload.value)
+    db.commit()
+    db.refresh(secret)
+    return secret
+
+
+@router.get("/{node_id}/capabilities", response_model=list[NodeCapabilityRead])
+def get_node_capabilities(
+    node_id: str,
+    db: Session = Depends(get_database_session),
+) -> list[NodeCapability]:
+    node = db.get(Node, node_id)
+    if node is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Node not found.")
+    return list(
+        db.scalars(
+            select(NodeCapability)
+            .where(NodeCapability.node_id == node_id)
+            .order_by(NodeCapability.capability_name.asc())
+        ).all()
+    )
+
+
+@router.post("/{node_id}/discover", response_model=NodeDiscoverResponse)
+def discover_node(
+    node_id: str,
+    db: Session = Depends(get_database_session),
+) -> NodeDiscoverResponse:
+    node = db.get(Node, node_id)
+    if node is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Node not found.")
+
+    try:
+        result = discovery_service.discover_node(db, node)
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)) from exc
+
+    capabilities = list(
+        db.scalars(
+            select(NodeCapability)
+            .where(NodeCapability.node_id == node_id)
+            .order_by(NodeCapability.capability_name.asc())
+        ).all()
+    )
+    db.refresh(node)
+    return NodeDiscoverResponse(
+        node=node,
+        interfaces=result["interfaces"],
+        capabilities=capabilities,
+    )
