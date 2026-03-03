@@ -255,6 +255,8 @@ class LinkService:
                 raise RuntimeError(stderr or "Handshake check failed after apply")
 
         except Exception as exc:
+            if progress_callback:
+                progress_callback("rollback started")
             for node, secret, iface, previous_content, path in (
                 (left_node, left_mgmt_secret, left_endpoint.interface_name, left_prev, left_path),
                 (right_node, right_mgmt_secret, right_endpoint.interface_name, right_prev, right_path),

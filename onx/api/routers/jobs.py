@@ -2,12 +2,14 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 
 from onx.api.deps import get_database_session
-from onx.schemas.jobs import JobRead
+from onx.schemas.jobs import EventLogRead, JobRead
+from onx.services.event_log_service import EventLogService
 from onx.services.job_service import JobService
 
 
 router = APIRouter(prefix="/jobs", tags=["jobs"])
 job_service = JobService()
+event_log_service = EventLogService()
 
 
 @router.get("", response_model=list[JobRead])
@@ -21,3 +23,11 @@ def get_job(job_id: str, db: Session = Depends(get_database_session)) -> object:
     if job is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Job not found.")
     return job
+
+
+@router.get("/{job_id}/events", response_model=list[EventLogRead])
+def get_job_events(job_id: str, db: Session = Depends(get_database_session)) -> list:
+    job = job_service.get_job(db, job_id)
+    if job is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Job not found.")
+    return event_log_service.list_for_job(db, job_id)

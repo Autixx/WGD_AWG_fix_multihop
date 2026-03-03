@@ -42,3 +42,20 @@ class JobRead(ONXBaseModel):
     started_at: datetime | None
     finished_at: datetime | None
     created_at: datetime
+
+
+class EventLevelValue(StrEnum):
+    INFO = "info"
+    WARNING = "warning"
+    ERROR = "error"
+
+
+class EventLogRead(ONXBaseModel):
+    id: str
+    job_id: str | None
+    entity_type: str
+    entity_id: str | None
+    level: EventLevelValue
+    message: str
+    details_json: dict | None
+    created_at: datetime
