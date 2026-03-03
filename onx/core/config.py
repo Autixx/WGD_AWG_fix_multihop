@@ -17,6 +17,7 @@ class Settings(BaseSettings):
     )
     master_key: str = "onx-dev-master-key-change-me"
     ssh_connect_timeout_seconds: int = 10
+    worker_poll_interval_seconds: int = 2
 
     model_config = SettingsConfigDict(
         env_prefix="ONX_",

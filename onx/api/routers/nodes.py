@@ -16,14 +16,12 @@ from onx.schemas.nodes import (
     NodeSecretUpsert,
     NodeUpdate,
 )
-from onx.services.discovery_service import DiscoveryService
 from onx.services.job_service import JobService
 from onx.services.secret_service import SecretService
 
 
 router = APIRouter(prefix="/nodes", tags=["nodes"])
 secret_service = SecretService()
-discovery_service = DiscoveryService()
 job_service = JobService()
 
 
@@ -123,7 +121,7 @@ def get_node_capabilities(
     )
 
 
-@router.post("/{node_id}/discover", response_model=JobRead)
+@router.post("/{node_id}/discover", response_model=JobRead, status_code=status.HTTP_202_ACCEPTED)
 def discover_node(
     node_id: str,
     db: Session = Depends(get_database_session),
@@ -139,38 +137,4 @@ def discover_node(
         target_id=node.id,
         request_payload={"node_id": node.id, "node_name": node.name},
     )
-    job_service.start_job(db, job, "starting discovery")
-
-    try:
-        result = discovery_service.discover_node(
-            db,
-            node,
-            progress_callback=lambda step: job_service.update_step(db, job, step),
-        )
-    except ValueError as exc:
-        job_service.fail(db, job, str(exc))
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
-    except RuntimeError as exc:
-        job_service.fail(db, job, str(exc))
-        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)) from exc
-
-    capabilities = list(
-        db.scalars(
-            select(NodeCapability)
-            .where(NodeCapability.node_id == node_id)
-            .order_by(NodeCapability.capability_name.asc())
-        ).all()
-    )
-    db.refresh(node)
-    return job_service.succeed(
-        db,
-        job,
-        {
-            "node": NodeRead.model_validate(node).model_dump(mode="json"),
-            "interfaces": result["interfaces"],
-            "capabilities": [
-                NodeCapabilityRead.model_validate(capability).model_dump(mode="json")
-                for capability in capabilities
-            ],
-        },
-    )
+    return job

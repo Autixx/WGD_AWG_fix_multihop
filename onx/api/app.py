@@ -8,12 +8,17 @@ from onx.api.routers.links import router as links_router
 from onx.api.routers.nodes import router as nodes_router
 from onx.core.config import get_settings
 from onx.db.session import init_db
+from onx.workers.job_worker import JobWorker
 
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
+    settings = get_settings()
+    worker = JobWorker(poll_interval_seconds=settings.worker_poll_interval_seconds)
     init_db()
+    worker.start()
     yield
+    worker.stop()
 
 
 def create_app() -> FastAPI:
