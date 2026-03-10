@@ -56,6 +56,7 @@ The repository should grow this structure:
     ADR-0004-control-plane-ha.md
     ADR-0005-interface-runtime-isolation.md
     ADR-0006-job-retry-and-cancel.md
+    ADR-0007-job-target-locking.md
     ONX_MIGRATIONS.md
 
 /onx

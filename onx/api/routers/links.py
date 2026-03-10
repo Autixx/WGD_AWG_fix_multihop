@@ -7,7 +7,7 @@ from onx.db.models.job import JobKind, JobTargetType
 from onx.db.models.link import Link
 from onx.schemas.jobs import JobEnqueueOptions, JobRead
 from onx.schemas.links import LinkCreate, LinkRead, LinkValidateResponse
-from onx.services.job_service import JobService
+from onx.services.job_service import JobConflictError, JobService
 from onx.services.link_service import LinkService
 
 
@@ -65,17 +65,27 @@ def apply_link(
     if link is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Link not found.")
 
-    job = job_service.create_job(
-        db,
-        kind=JobKind.APPLY,
-        target_type=JobTargetType.LINK,
-        target_id=link.id,
-        request_payload={
-            "link_id": link.id,
-            "link_name": link.name,
-            "driver_name": link.driver_name,
-        },
-        max_attempts=options.max_attempts if options else None,
-        retry_delay_seconds=options.retry_delay_seconds if options else None,
-    )
+    try:
+        job = job_service.create_job(
+            db,
+            kind=JobKind.APPLY,
+            target_type=JobTargetType.LINK,
+            target_id=link.id,
+            request_payload={
+                "link_id": link.id,
+                "link_name": link.name,
+                "driver_name": link.driver_name,
+            },
+            max_attempts=options.max_attempts if options else None,
+            retry_delay_seconds=options.retry_delay_seconds if options else None,
+        )
+    except JobConflictError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "message": str(exc),
+                "existing_job_id": exc.job_id,
+                "existing_job_state": exc.job_state,
+            },
+        ) from exc
     return job

@@ -1,16 +1,30 @@
 from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import and_, or_, select, update
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from onx.core.config import get_settings
 from onx.db.models.event_log import EventLevel
 from onx.db.models.job import Job, JobKind, JobState, JobTargetType
+from onx.db.models.job_lock import JobLock
 from onx.services.event_log_service import EventLogService
 
 
 class JobCancelledError(RuntimeError):
     """Raised when a running job receives a cancel request."""
+
+
+class JobConflictError(ValueError):
+    def __init__(self, job: Job):
+        self.job_id = job.id
+        self.job_state = job.state.value
+        self.target_type = job.target_type.value
+        self.target_id = job.target_id
+        super().__init__(
+            f"Active job already exists for target {self.target_type}:{self.target_id} "
+            f"(job_id={self.job_id}, state={self.job_state})."
+        )
 
 
 class JobService:
@@ -32,6 +46,18 @@ class JobService:
         now = datetime.now(timezone.utc)
         resolved_max_attempts = max_attempts or self._settings.job_default_max_attempts
         resolved_retry_delay = retry_delay_seconds or self._settings.job_default_retry_delay_seconds
+        conflict = db.scalar(
+            select(Job)
+            .where(
+                Job.target_type == target_type,
+                Job.target_id == target_id,
+                Job.state.in_([JobState.PENDING, JobState.RUNNING]),
+            )
+            .order_by(Job.created_at.asc())
+        )
+        if conflict is not None:
+            raise JobConflictError(conflict)
+
         job = Job(
             kind=kind,
             target_type=target_type,
@@ -140,6 +166,16 @@ class JobService:
             "attempt_count": candidate.attempt_count + 1,
             "next_run_at": None,
         }
+        lock_key = self._lock_key(candidate.target_type.value, candidate.target_id)
+        if not self._acquire_lock(
+            db,
+            lock_key=lock_key,
+            candidate=candidate,
+            worker_id=worker_id,
+            now=now,
+            lease_until=lease_until,
+        ):
+            return None
 
         conditions = [Job.id == candidate.id]
         if candidate.state == JobState.PENDING:
@@ -183,6 +219,91 @@ class JobService:
         )
         return job
 
+    @staticmethod
+    def _lock_key(target_type: str, target_id: str) -> str:
+        return f"{target_type}:{target_id}"
+
+    def _acquire_lock(
+        self,
+        db: Session,
+        *,
+        lock_key: str,
+        candidate: Job,
+        worker_id: str,
+        now: datetime,
+        lease_until: datetime,
+    ) -> bool:
+        lock = db.get(JobLock, lock_key)
+        if lock is None:
+            db.add(
+                JobLock(
+                    lock_key=lock_key,
+                    target_type=candidate.target_type.value,
+                    target_id=candidate.target_id,
+                    job_id=candidate.id,
+                    worker_owner=worker_id,
+                    acquired_at=now,
+                    expires_at=lease_until,
+                )
+            )
+            try:
+                db.flush()
+                return True
+            except IntegrityError:
+                db.rollback()
+                return False
+
+        if lock.expires_at >= now and lock.worker_owner != worker_id:
+            return False
+
+        lock.target_type = candidate.target_type.value
+        lock.target_id = candidate.target_id
+        lock.job_id = candidate.id
+        lock.worker_owner = worker_id
+        lock.acquired_at = now
+        lock.expires_at = lease_until
+        db.add(lock)
+        db.flush()
+        return True
+
+    def _touch_lock(
+        self,
+        db: Session,
+        *,
+        job: Job,
+        worker_id: str,
+        lease_until: datetime,
+    ) -> None:
+        lock_key = self._lock_key(job.target_type.value, job.target_id)
+        lock = db.get(JobLock, lock_key)
+        if lock is None:
+            db.add(
+                JobLock(
+                    lock_key=lock_key,
+                    target_type=job.target_type.value,
+                    target_id=job.target_id,
+                    job_id=job.id,
+                    worker_owner=worker_id,
+                    acquired_at=datetime.now(timezone.utc),
+                    expires_at=lease_until,
+                )
+            )
+            db.flush()
+            return
+
+        lock.job_id = job.id
+        lock.worker_owner = worker_id
+        lock.expires_at = lease_until
+        db.add(lock)
+        db.flush()
+
+    def _release_lock(self, db: Session, *, job: Job) -> None:
+        lock_key = self._lock_key(job.target_type.value, job.target_id)
+        lock = db.get(JobLock, lock_key)
+        if lock is not None:
+            db.delete(lock)
+            db.flush()
+
     def request_cancel(self, db: Session, job: Job, reason: str = "Cancel requested by user.") -> Job:
         if job.state in (
             JobState.SUCCEEDED,
@@ -219,6 +340,18 @@ class JobService:
             raise ValueError("Cannot retry succeeded job.")
         if job.state == JobState.ROLLED_BACK:
             raise ValueError("Cannot retry rolled_back job.")
+        conflict = db.scalar(
+            select(Job)
+            .where(
+                Job.target_type == job.target_type,
+                Job.target_id == job.target_id,
+                Job.id != job.id,
+                Job.state.in_([JobState.PENDING, JobState.RUNNING]),
+            )
+            .order_by(Job.created_at.asc())
+        )
+        if conflict is not None:
+            raise JobConflictError(conflict)
 
         job.state = JobState.PENDING
         job.current_step = "manual retry requested"
@@ -271,6 +404,7 @@ class JobService:
         job.next_run_at = None
         job.finished_at = now
         job.cancelled_at = now
+        self._release_lock(db, job=job)
         db.add(job)
         db.commit()
         db.refresh(job)
@@ -293,7 +427,9 @@ class JobService:
             raise JobCancelledError("Job was cancelled by user.")
         job.worker_owner = worker_id
         job.heartbeat_at = now
-        job.lease_expires_at = now + timedelta(seconds=lease_seconds)
+        lease_until = now + timedelta(seconds=lease_seconds)
+        job.lease_expires_at = lease_until
+        self._touch_lock(db, job=job, worker_id=worker_id, lease_until=lease_until)
         db.add(job)
         db.commit()
         db.refresh(job)
@@ -325,6 +461,7 @@ class JobService:
         job.cancel_requested = False
         job.next_run_at = None
         job.finished_at = datetime.now(timezone.utc)
+        self._release_lock(db, job=job)
         db.add(job)
         db.commit()
         db.refresh(job)
@@ -348,6 +485,7 @@ class JobService:
         job.cancel_requested = False
         job.next_run_at = None
         job.finished_at = datetime.now(timezone.utc)
+        self._release_lock(db, job=job)
         db.add(job)
         db.commit()
         db.refresh(job)
@@ -378,6 +516,7 @@ class JobService:
             job.lease_expires_at = None
             job.next_run_at = retry_at
             job.finished_at = None
+            self._release_lock(db, job=job)
             db.add(job)
             db.commit()
             db.refresh(job)

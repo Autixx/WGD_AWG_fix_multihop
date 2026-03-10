@@ -16,7 +16,7 @@ from onx.schemas.nodes import (
     NodeSecretUpsert,
     NodeUpdate,
 )
-from onx.services.job_service import JobService
+from onx.services.job_service import JobConflictError, JobService
 from onx.services.secret_service import SecretService
 
 
@@ -131,15 +131,25 @@ def discover_node(
     if node is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Node not found.")
 
-    job = job_service.create_job(
-        db,
-        kind=JobKind.DISCOVER,
-        target_type=JobTargetType.NODE,
-        target_id=node.id,
-        request_payload={"node_id": node.id, "node_name": node.name},
-        max_attempts=options.max_attempts if options else None,
-        retry_delay_seconds=options.retry_delay_seconds if options else None,
-    )
+    try:
+        job = job_service.create_job(
+            db,
+            kind=JobKind.DISCOVER,
+            target_type=JobTargetType.NODE,
+            target_id=node.id,
+            request_payload={"node_id": node.id, "node_name": node.name},
+            max_attempts=options.max_attempts if options else None,
+            retry_delay_seconds=options.retry_delay_seconds if options else None,
+        )
+    except JobConflictError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "message": str(exc),
+                "existing_job_id": exc.job_id,
+                "existing_job_state": exc.job_state,
+            },
+        ) from exc
     return job
 
 
@@ -153,17 +163,27 @@ def bootstrap_node_runtime(
     if node is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Node not found.")
 
-    job = job_service.create_job(
-        db,
-        kind=JobKind.BOOTSTRAP,
-        target_type=JobTargetType.NODE,
-        target_id=node.id,
-        request_payload={
-            "node_id": node.id,
-            "node_name": node.name,
-            "bootstrap": "runtime_assets",
-        },
-        max_attempts=options.max_attempts if options else None,
-        retry_delay_seconds=options.retry_delay_seconds if options else None,
-    )
+    try:
+        job = job_service.create_job(
+            db,
+            kind=JobKind.BOOTSTRAP,
+            target_type=JobTargetType.NODE,
+            target_id=node.id,
+            request_payload={
+                "node_id": node.id,
+                "node_name": node.name,
+                "bootstrap": "runtime_assets",
+            },
+            max_attempts=options.max_attempts if options else None,
+            retry_delay_seconds=options.retry_delay_seconds if options else None,
+        )
+    except JobConflictError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "message": str(exc),
+                "existing_job_id": exc.job_id,
+                "existing_job_state": exc.job_state,
+            },
+        ) from exc
     return job

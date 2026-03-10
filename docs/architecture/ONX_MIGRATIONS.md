@@ -34,6 +34,7 @@ python -m alembic -c alembic.ini downgrade -1
 
 - `alembic.ini` is tracked in repo and explicitly unignored in `.gitignore`.
 - current baseline revision includes jobs retry/cancel fields and extended job states.
+- `0002_add_job_locks` adds persistent target-scoped locks for worker concurrency control.
 - jobs API supports:
   - `POST /api/v1/jobs/{id}/cancel`
   - `POST /api/v1/jobs/{id}/retry-now`
