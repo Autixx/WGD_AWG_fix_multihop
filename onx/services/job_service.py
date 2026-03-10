@@ -212,6 +212,38 @@ class JobService:
         )
         return job
 
+    def request_retry_now(self, db: Session, job: Job, reason: str = "Manual retry requested.") -> Job:
+        if job.state == JobState.RUNNING:
+            raise ValueError("Cannot retry running job. Cancel it first if needed.")
+        if job.state == JobState.SUCCEEDED:
+            raise ValueError("Cannot retry succeeded job.")
+        if job.state == JobState.ROLLED_BACK:
+            raise ValueError("Cannot retry rolled_back job.")
+
+        job.state = JobState.PENDING
+        job.current_step = "manual retry requested"
+        job.error_text = None
+        job.worker_owner = None
+        job.heartbeat_at = None
+        job.lease_expires_at = None
+        job.cancel_requested = False
+        job.finished_at = None
+        job.cancelled_at = None
+        job.next_run_at = datetime.now(timezone.utc)
+        db.add(job)
+        db.commit()
+        db.refresh(job)
+        self._events.log(
+            db,
+            job_id=job.id,
+            entity_type=job.target_type.value,
+            entity_id=job.target_id,
+            level=EventLevel.INFO,
+            message="Manual retry requested",
+            details={"reason": reason},
+        )
+        return job
+
     def cancel(self, db: Session, job: Job, reason: str = "Job cancelled.") -> Job:
         now = datetime.now(timezone.utc)
         job.state = JobState.CANCELLED

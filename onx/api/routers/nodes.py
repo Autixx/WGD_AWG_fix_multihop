@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Body, Depends, HTTPException, status
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -7,7 +7,7 @@ from onx.db.models.node import Node
 from onx.db.models.job import JobKind, JobTargetType
 from onx.db.models.node_capability import NodeCapability
 from onx.db.models.node_secret import NodeSecretKind
-from onx.schemas.jobs import JobRead
+from onx.schemas.jobs import JobEnqueueOptions, JobRead
 from onx.schemas.nodes import (
     NodeCapabilityRead,
     NodeCreate,
@@ -124,6 +124,7 @@ def get_node_capabilities(
 @router.post("/{node_id}/discover", response_model=JobRead, status_code=status.HTTP_202_ACCEPTED)
 def discover_node(
     node_id: str,
+    options: JobEnqueueOptions | None = Body(default=None),
     db: Session = Depends(get_database_session),
 ) -> JobRead:
     node = db.get(Node, node_id)
@@ -136,6 +137,8 @@ def discover_node(
         target_type=JobTargetType.NODE,
         target_id=node.id,
         request_payload={"node_id": node.id, "node_name": node.name},
+        max_attempts=options.max_attempts if options else None,
+        retry_delay_seconds=options.retry_delay_seconds if options else None,
     )
     return job
 
@@ -143,6 +146,7 @@ def discover_node(
 @router.post("/{node_id}/bootstrap-runtime", response_model=JobRead, status_code=status.HTTP_202_ACCEPTED)
 def bootstrap_node_runtime(
     node_id: str,
+    options: JobEnqueueOptions | None = Body(default=None),
     db: Session = Depends(get_database_session),
 ) -> JobRead:
     node = db.get(Node, node_id)
@@ -159,5 +163,7 @@ def bootstrap_node_runtime(
             "node_name": node.name,
             "bootstrap": "runtime_assets",
         },
+        max_attempts=options.max_attempts if options else None,
+        retry_delay_seconds=options.retry_delay_seconds if options else None,
     )
     return job

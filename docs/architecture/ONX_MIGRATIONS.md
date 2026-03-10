@@ -29,3 +29,8 @@ Downgrade one revision:
 ```bash
 python -m alembic -c alembic.ini downgrade -1
 ```
+
+## Notes
+
+- `alembic.ini` is tracked in repo and explicitly unignored in `.gitignore`.
+- current baseline revision includes jobs retry/cancel fields and extended job states.

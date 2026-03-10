@@ -1,11 +1,11 @@
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Body, Depends, HTTPException, status
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from onx.api.deps import get_database_session
 from onx.db.models.job import JobKind, JobTargetType
 from onx.db.models.link import Link
-from onx.schemas.jobs import JobRead
+from onx.schemas.jobs import JobEnqueueOptions, JobRead
 from onx.schemas.links import LinkCreate, LinkRead, LinkValidateResponse
 from onx.services.job_service import JobService
 from onx.services.link_service import LinkService
@@ -56,7 +56,11 @@ def validate_link(link_id: str, db: Session = Depends(get_database_session)) -> 
 
 
 @router.post("/{link_id}/apply", response_model=JobRead, status_code=status.HTTP_202_ACCEPTED)
-def apply_link(link_id: str, db: Session = Depends(get_database_session)) -> JobRead:
+def apply_link(
+    link_id: str,
+    options: JobEnqueueOptions | None = Body(default=None),
+    db: Session = Depends(get_database_session),
+) -> JobRead:
     link = db.get(Link, link_id)
     if link is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Link not found.")
@@ -71,5 +75,7 @@ def apply_link(link_id: str, db: Session = Depends(get_database_session)) -> Job
             "link_name": link.name,
             "driver_name": link.driver_name,
         },
+        max_attempts=options.max_attempts if options else None,
+        retry_delay_seconds=options.retry_delay_seconds if options else None,
     )
     return job

@@ -1,6 +1,8 @@
 from datetime import datetime
 from enum import StrEnum
 
+from pydantic import Field
+
 from onx.schemas.common import ONXBaseModel
 
 
@@ -71,3 +73,8 @@ class EventLogRead(ONXBaseModel):
     message: str
     details_json: dict | None
     created_at: datetime
+
+
+class JobEnqueueOptions(ONXBaseModel):
+    max_attempts: int | None = Field(default=None, ge=1, le=100)
+    retry_delay_seconds: int | None = Field(default=None, ge=1, le=86400)
