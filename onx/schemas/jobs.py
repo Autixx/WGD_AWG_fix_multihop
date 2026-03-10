@@ -78,3 +78,19 @@ class EventLogRead(ONXBaseModel):
 class JobEnqueueOptions(ONXBaseModel):
     max_attempts: int | None = Field(default=None, ge=1, le=100)
     retry_delay_seconds: int | None = Field(default=None, ge=1, le=86400)
+
+
+class JobLockRead(ONXBaseModel):
+    lock_key: str
+    target_type: str
+    target_id: str
+    job_id: str | None
+    worker_owner: str
+    acquired_at: datetime
+    expires_at: datetime
+    updated_at: datetime
+
+
+class JobLockCleanupResult(ONXBaseModel):
+    removed_count: int
+    removed_lock_keys: list[str]

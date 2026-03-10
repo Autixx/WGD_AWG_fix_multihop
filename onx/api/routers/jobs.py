@@ -1,8 +1,8 @@
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session
 
 from onx.api.deps import get_database_session
-from onx.schemas.jobs import EventLogRead, JobRead
+from onx.schemas.jobs import EventLogRead, JobLockCleanupResult, JobLockRead, JobRead
 from onx.services.event_log_service import EventLogService
 from onx.services.job_service import JobService
 
@@ -15,6 +15,20 @@ event_log_service = EventLogService()
 @router.get("", response_model=list[JobRead])
 def list_jobs(db: Session = Depends(get_database_session)) -> list:
     return job_service.list_jobs(db)
+
+
+@router.get("/locks", response_model=list[JobLockRead])
+def list_job_locks(db: Session = Depends(get_database_session)) -> list:
+    return job_service.list_locks(db)
+
+
+@router.post("/locks/cleanup", response_model=JobLockCleanupResult)
+def cleanup_job_locks(
+    limit: int = Query(default=500, ge=1, le=5000),
+    db: Session = Depends(get_database_session),
+) -> JobLockCleanupResult:
+    removed = job_service.cleanup_expired_locks(db, limit=limit)
+    return JobLockCleanupResult(removed_count=len(removed), removed_lock_keys=removed)
 
 
 @router.get("/{job_id}", response_model=JobRead)

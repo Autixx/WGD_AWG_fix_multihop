@@ -548,3 +548,56 @@ class JobService:
 
     def get_job(self, db: Session, job_id: str) -> Job | None:
         return db.get(Job, job_id)
+
+    def list_locks(self, db: Session) -> list[JobLock]:
+        return list(
+            db.scalars(
+                select(JobLock).order_by(JobLock.expires_at.asc(), JobLock.lock_key.asc())
+            ).all()
+        )
+
+    def cleanup_expired_locks(self, db: Session, *, limit: int = 500) -> list[str]:
+        now = datetime.now(timezone.utc)
+        candidates = list(
+            db.scalars(
+                select(JobLock)
+                .where(JobLock.expires_at < now)
+                .order_by(JobLock.expires_at.asc())
+                .limit(max(1, min(limit, 5000)))
+            ).all()
+        )
+        if not candidates:
+            return []
+
+        removed_keys: list[str] = []
+        for lock in candidates:
+            active_job = db.get(Job, lock.job_id) if lock.job_id else None
+            if (
+                active_job is not None
+                and active_job.state in (JobState.PENDING, JobState.RUNNING)
+                and active_job.cancel_requested is False
+                and active_job.lease_expires_at is not None
+                and active_job.lease_expires_at >= now
+            ):
+                continue
+
+            removed_keys.append(lock.lock_key)
+            db.delete(lock)
+
+        if removed_keys:
+            db.commit()
+            self._events.log(
+                db,
+                entity_type="job_lock",
+                entity_id=None,
+                level=EventLevel.INFO,
+                message="Expired job locks cleaned up",
+                details={
+                    "removed_count": len(removed_keys),
+                    "removed_lock_keys": removed_keys,
+                },
+            )
+        else:
+            db.rollback()
+
+        return removed_keys
