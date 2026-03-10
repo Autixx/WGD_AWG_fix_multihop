@@ -41,3 +41,5 @@ python -m alembic -c alembic.ini downgrade -1
   - `POST /api/v1/jobs/{id}/force-cancel` (only for expired-lease running jobs)
   - `GET /api/v1/jobs/locks`
   - `POST /api/v1/jobs/locks/cleanup`
+- health API supports:
+  - `GET /api/v1/health/worker` (worker runtime snapshot + queue/lock stats)

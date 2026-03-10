@@ -20,6 +20,7 @@ from onx.services.interface_runtime_service import InterfaceRuntimeService
 from onx.services.job_service import JobCancelledError, JobService
 from onx.services.link_service import LinkService
 from onx.services.node_runtime_bootstrap_service import NodeRuntimeBootstrapService
+from onx.workers.runtime_state import WorkerRuntimeState, get_worker_runtime_state
 
 
 class JobWorker:
@@ -29,6 +30,7 @@ class JobWorker:
         poll_interval_seconds: int = 2,
         lease_seconds: int = 300,
         worker_id: str | None = None,
+        runtime_state: WorkerRuntimeState | None = None,
     ) -> None:
         settings = get_settings()
         self._poll_interval_seconds = poll_interval_seconds
@@ -40,10 +42,16 @@ class JobWorker:
         self._discovery = DiscoveryService()
         self._links = LinkService()
         self._node_runtime = NodeRuntimeBootstrapService(InterfaceRuntimeService(SSHExecutor()))
+        self._runtime_state = runtime_state or get_worker_runtime_state()
 
     def start(self) -> None:
         if self._scheduler.running:
             return
+        self._runtime_state.mark_started(
+            worker_id=self._worker_id,
+            poll_interval_seconds=self._poll_interval_seconds,
+            lease_seconds=self._lease_seconds,
+        )
         self._scheduler.add_job(
             self._poll_pending_jobs,
             "interval",
@@ -58,11 +66,13 @@ class JobWorker:
     def stop(self) -> None:
         if self._scheduler.running:
             self._scheduler.shutdown(wait=False)
+        self._runtime_state.mark_stopped()
 
     def _poll_pending_jobs(self) -> None:
         if not self._lock.acquire(blocking=False):
             return
 
+        self._runtime_state.mark_poll_started()
         try:
             while True:
                 with SessionLocal() as db:
@@ -73,8 +83,13 @@ class JobWorker:
                     )
                     if job is None:
                         break
+                    self._runtime_state.mark_job_claimed()
                     self._execute_job(job.id)
+        except Exception as exc:
+            self._runtime_state.mark_error(str(exc))
+            raise
         finally:
+            self._runtime_state.mark_poll_finished()
             self._lock.release()
 
     def _execute_job(self, job_id: str) -> None:
@@ -88,6 +103,7 @@ class JobWorker:
                 return
             if job.cancel_requested:
                 self._jobs.cancel(db, job, "Cancelled before execution start.")
+                self._runtime_state.mark_job_cancelled()
                 return
 
             try:
@@ -100,9 +116,21 @@ class JobWorker:
                 else:
                     raise ValueError(f"Unsupported job kind '{job.kind.value}'.")
             except JobCancelledError:
+                self._runtime_state.mark_job_cancelled()
                 return
             except Exception as exc:
                 self._jobs.handle_execution_error(db, job, str(exc))
+                self._runtime_state.mark_error(str(exc))
+            finally:
+                db.refresh(job)
+                if job.state == JobState.SUCCEEDED:
+                    self._runtime_state.mark_job_succeeded()
+                elif job.state in (JobState.FAILED, JobState.DEAD):
+                    self._runtime_state.mark_job_failed()
+                elif job.state == JobState.CANCELLED:
+                    self._runtime_state.mark_job_cancelled()
+                elif job.state == JobState.PENDING and job.current_step == "retry scheduled":
+                    self._runtime_state.mark_job_retried()
 
     def _execute_discover(self, db, job: Job) -> None:
         node = db.get(Node, job.target_id)
