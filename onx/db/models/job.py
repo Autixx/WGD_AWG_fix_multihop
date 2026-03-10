@@ -2,7 +2,7 @@ from datetime import datetime
 from enum import StrEnum
 from uuid import uuid4
 
-from sqlalchemy import DateTime, Enum, JSON, String, Text, func
+from sqlalchemy import Boolean, DateTime, Enum, Integer, JSON, String, Text, func
 from sqlalchemy.orm import Mapped, mapped_column
 
 from onx.db.base import Base
@@ -32,6 +32,8 @@ class JobState(StrEnum):
     SUCCEEDED = "succeeded"
     FAILED = "failed"
     ROLLED_BACK = "rolled_back"
+    CANCELLED = "cancelled"
+    DEAD = "dead"
 
 
 class Job(Base):
@@ -51,6 +53,10 @@ class Job(Base):
         default=JobState.PENDING,
         index=True,
     )
+    max_attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=3)
+    retry_delay_seconds: Mapped[int] = mapped_column(Integer, nullable=False, default=15)
+    next_run_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True, index=True)
+    cancel_requested: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, index=True)
     current_step: Mapped[str | None] = mapped_column(String(255), nullable=True)
     request_payload_json: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
     result_payload_json: Mapped[dict | None] = mapped_column(JSON, nullable=True)
@@ -61,6 +67,7 @@ class Job(Base):
     lease_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True, index=True)
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    cancelled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         nullable=False,

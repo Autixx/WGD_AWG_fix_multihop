@@ -28,6 +28,8 @@ class JobStateValue(StrEnum):
     SUCCEEDED = "succeeded"
     FAILED = "failed"
     ROLLED_BACK = "rolled_back"
+    CANCELLED = "cancelled"
+    DEAD = "dead"
 
 
 class JobRead(ONXBaseModel):
@@ -36,6 +38,10 @@ class JobRead(ONXBaseModel):
     target_type: JobTargetTypeValue
     target_id: str
     state: JobStateValue
+    max_attempts: int
+    retry_delay_seconds: int
+    next_run_at: datetime | None
+    cancel_requested: bool
     worker_owner: str | None
     attempt_count: int
     current_step: str | None
@@ -46,6 +52,7 @@ class JobRead(ONXBaseModel):
     lease_expires_at: datetime | None
     started_at: datetime | None
     finished_at: datetime | None
+    cancelled_at: datetime | None
     created_at: datetime
 
 

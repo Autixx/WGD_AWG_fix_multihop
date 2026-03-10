@@ -25,6 +25,8 @@ class Settings(BaseSettings):
     worker_id: str = Field(
         default_factory=lambda: f"{socket.gethostname()}-{os.getpid()}-{uuid4().hex[:8]}",
     )
+    job_default_max_attempts: int = 3
+    job_default_retry_delay_seconds: int = 15
     onx_conf_dir: str = "/etc/amnezia/amneziawg"
     onx_link_runner_path: str = "/usr/local/lib/onx/onx-link-runner"
     onx_link_unit_path: str = "/etc/systemd/system/onx-link@.service"

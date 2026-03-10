@@ -17,7 +17,7 @@ from onx.schemas.links import LinkRead
 from onx.schemas.nodes import NodeCapabilityRead, NodeRead
 from onx.services.discovery_service import DiscoveryService
 from onx.services.interface_runtime_service import InterfaceRuntimeService
-from onx.services.job_service import JobService
+from onx.services.job_service import JobCancelledError, JobService
 from onx.services.link_service import LinkService
 from onx.services.node_runtime_bootstrap_service import NodeRuntimeBootstrapService
 
@@ -86,6 +86,9 @@ class JobWorker:
                 or job.worker_owner != self._worker_id
             ):
                 return
+            if job.cancel_requested:
+                self._jobs.cancel(db, job, "Cancelled before execution start.")
+                return
 
             try:
                 if job.kind == JobKind.DISCOVER:
@@ -96,8 +99,10 @@ class JobWorker:
                     self._execute_apply(db, job)
                 else:
                     raise ValueError(f"Unsupported job kind '{job.kind.value}'.")
+            except JobCancelledError:
+                return
             except Exception as exc:
-                self._jobs.fail(db, job, str(exc))
+                self._jobs.handle_execution_error(db, job, str(exc))
 
     def _execute_discover(self, db, job: Job) -> None:
         node = db.get(Node, job.target_id)

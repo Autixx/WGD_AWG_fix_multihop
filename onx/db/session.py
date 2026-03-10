@@ -1,10 +1,10 @@
 from collections.abc import Generator
 
-from sqlalchemy import create_engine, inspect, text
+from sqlalchemy import create_engine
 from sqlalchemy.orm import Session, sessionmaker
 
 from onx.core.config import get_settings
-from onx.db.base import Base
+from onx.db.migrations import upgrade_to_head
 
 
 settings = get_settings()
@@ -31,33 +31,10 @@ SessionLocal = sessionmaker(
 
 
 def init_db() -> None:
-    # Import models here so metadata is complete before create_all.
+    # Import models so enums and metadata are visible to Alembic env.
     import onx.db.models  # noqa: F401
 
-    Base.metadata.create_all(bind=engine)
-    _ensure_runtime_schema()
-
-
-def _ensure_runtime_schema() -> None:
-    inspector = inspect(engine)
-    columns = {column["name"] for column in inspector.get_columns("jobs")}
-    statements: list[str] = []
-
-    if "worker_owner" not in columns:
-        statements.append("ALTER TABLE jobs ADD COLUMN worker_owner VARCHAR(128)")
-    if "attempt_count" not in columns:
-        statements.append("ALTER TABLE jobs ADD COLUMN attempt_count INTEGER NOT NULL DEFAULT 0")
-    if "heartbeat_at" not in columns:
-        statements.append("ALTER TABLE jobs ADD COLUMN heartbeat_at DATETIME")
-    if "lease_expires_at" not in columns:
-        statements.append("ALTER TABLE jobs ADD COLUMN lease_expires_at DATETIME")
-
-    if not statements:
-        return
-
-    with engine.begin() as connection:
-        for statement in statements:
-            connection.execute(text(statement))
+    upgrade_to_head()
 
 
 def get_db() -> Generator[Session, None, None]:

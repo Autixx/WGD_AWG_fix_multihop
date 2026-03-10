@@ -3,13 +3,19 @@ from datetime import datetime, timedelta, timezone
 from sqlalchemy import and_, or_, select, update
 from sqlalchemy.orm import Session
 
+from onx.core.config import get_settings
 from onx.db.models.event_log import EventLevel
 from onx.db.models.job import Job, JobKind, JobState, JobTargetType
 from onx.services.event_log_service import EventLogService
 
 
+class JobCancelledError(RuntimeError):
+    """Raised when a running job receives a cancel request."""
+
+
 class JobService:
     def __init__(self) -> None:
+        self._settings = get_settings()
         self._events = EventLogService()
 
     def create_job(
@@ -20,12 +26,20 @@ class JobService:
         target_type: JobTargetType,
         target_id: str,
         request_payload: dict,
+        max_attempts: int | None = None,
+        retry_delay_seconds: int | None = None,
     ) -> Job:
+        now = datetime.now(timezone.utc)
+        resolved_max_attempts = max_attempts or self._settings.job_default_max_attempts
+        resolved_retry_delay = retry_delay_seconds or self._settings.job_default_retry_delay_seconds
         job = Job(
             kind=kind,
             target_type=target_type,
             target_id=target_id,
             state=JobState.PENDING,
+            max_attempts=resolved_max_attempts,
+            retry_delay_seconds=resolved_retry_delay,
+            next_run_at=now,
             request_payload_json=request_payload,
         )
         db.add(job)
@@ -38,7 +52,11 @@ class JobService:
             entity_id=target_id,
             level=EventLevel.INFO,
             message=f"Job created: {kind.value}",
-            details={"request_payload": request_payload},
+            details={
+                "request_payload": request_payload,
+                "max_attempts": resolved_max_attempts,
+                "retry_delay_seconds": resolved_retry_delay,
+            },
         )
         return job
 
@@ -67,10 +85,18 @@ class JobService:
                 select(Job)
                 .where(
                     or_(
-                        Job.state == JobState.PENDING,
+                        and_(
+                            Job.state == JobState.PENDING,
+                            Job.cancel_requested.is_(False),
+                            or_(
+                                Job.next_run_at.is_(None),
+                                Job.next_run_at <= now,
+                            ),
+                        ),
                         and_(
                             Job.state == JobState.RUNNING,
                             Job.finished_at.is_(None),
+                            Job.cancel_requested.is_(False),
                             Job.lease_expires_at.is_not(None),
                             Job.lease_expires_at < now,
                         ),
@@ -112,6 +138,7 @@ class JobService:
             "error_text": None,
             "started_at": candidate.started_at or now,
             "attempt_count": candidate.attempt_count + 1,
+            "next_run_at": None,
         }
 
         conditions = [Job.id == candidate.id]
@@ -156,8 +183,67 @@ class JobService:
         )
         return job
 
+    def request_cancel(self, db: Session, job: Job, reason: str = "Cancel requested by user.") -> Job:
+        if job.state in (
+            JobState.SUCCEEDED,
+            JobState.FAILED,
+            JobState.ROLLED_BACK,
+            JobState.CANCELLED,
+            JobState.DEAD,
+        ):
+            raise ValueError(f"Job is already terminal with state '{job.state.value}'.")
+
+        job.cancel_requested = True
+        if job.state == JobState.PENDING:
+            return self.cancel(db, job, reason)
+
+        job.current_step = "cancel requested"
+        db.add(job)
+        db.commit()
+        db.refresh(job)
+        self._events.log(
+            db,
+            job_id=job.id,
+            entity_type=job.target_type.value,
+            entity_id=job.target_id,
+            level=EventLevel.WARNING,
+            message="Cancel requested for running job",
+            details={"reason": reason},
+        )
+        return job
+
+    def cancel(self, db: Session, job: Job, reason: str = "Job cancelled.") -> Job:
+        now = datetime.now(timezone.utc)
+        job.state = JobState.CANCELLED
+        job.current_step = "cancelled"
+        job.error_text = reason
+        job.worker_owner = None
+        job.heartbeat_at = None
+        job.lease_expires_at = None
+        job.cancel_requested = False
+        job.next_run_at = None
+        job.finished_at = now
+        job.cancelled_at = now
+        db.add(job)
+        db.commit()
+        db.refresh(job)
+        self._events.log(
+            db,
+            job_id=job.id,
+            entity_type=job.target_type.value,
+            entity_id=job.target_id,
+            level=EventLevel.WARNING,
+            message="Job cancelled",
+            details={"reason": reason},
+        )
+        return job
+
     def heartbeat(self, db: Session, job: Job, *, worker_id: str, lease_seconds: int) -> Job:
         now = datetime.now(timezone.utc)
+        db.refresh(job)
+        if job.cancel_requested:
+            self.cancel(db, job, "Cancelled during execution by user request.")
+            raise JobCancelledError("Job was cancelled by user.")
         job.worker_owner = worker_id
         job.heartbeat_at = now
         job.lease_expires_at = now + timedelta(seconds=lease_seconds)
@@ -189,6 +275,8 @@ class JobService:
         job.worker_owner = None
         job.heartbeat_at = None
         job.lease_expires_at = None
+        job.cancel_requested = False
+        job.next_run_at = None
         job.finished_at = datetime.now(timezone.utc)
         db.add(job)
         db.commit()
@@ -210,6 +298,8 @@ class JobService:
         job.worker_owner = None
         job.heartbeat_at = None
         job.lease_expires_at = None
+        job.cancel_requested = False
+        job.next_run_at = None
         job.finished_at = datetime.now(timezone.utc)
         db.add(job)
         db.commit()
@@ -224,6 +314,48 @@ class JobService:
             details={"error": error_text, "state": state.value},
         )
         return job
+
+    def handle_execution_error(self, db: Session, job: Job, error_text: str) -> Job:
+        if job.cancel_requested:
+            return self.cancel(db, job, "Cancelled after execution error.")
+
+        attempts = job.attempt_count
+        max_attempts = max(1, job.max_attempts)
+        if attempts < max_attempts:
+            retry_at = datetime.now(timezone.utc) + timedelta(seconds=max(1, job.retry_delay_seconds))
+            job.state = JobState.PENDING
+            job.current_step = "retry scheduled"
+            job.error_text = error_text
+            job.worker_owner = None
+            job.heartbeat_at = None
+            job.lease_expires_at = None
+            job.next_run_at = retry_at
+            job.finished_at = None
+            db.add(job)
+            db.commit()
+            db.refresh(job)
+            self._events.log(
+                db,
+                job_id=job.id,
+                entity_type=job.target_type.value,
+                entity_id=job.target_id,
+                level=EventLevel.WARNING,
+                message="Retry scheduled",
+                details={
+                    "attempt_count": attempts,
+                    "max_attempts": max_attempts,
+                    "retry_at": retry_at.isoformat(),
+                    "error": error_text,
+                },
+            )
+            return job
+
+        return self.fail(
+            db,
+            job,
+            error_text=error_text,
+            state=JobState.DEAD,
+        )
 
     def list_jobs(self, db: Session) -> list[Job]:
         return list(db.scalars(select(Job).order_by(Job.created_at.desc())).all())

@@ -54,6 +54,9 @@ The repository should grow this structure:
     ADR-0002-driver-contract.md
     ADR-0003-ssh-first-deployment.md
     ADR-0004-control-plane-ha.md
+    ADR-0005-interface-runtime-isolation.md
+    ADR-0006-job-retry-and-cancel.md
+    ONX_MIGRATIONS.md
 
 /onx
   /api
