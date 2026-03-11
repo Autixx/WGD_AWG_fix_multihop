@@ -1,9 +1,68 @@
-Thats my fork for WGDashboard with couple of features - AWG2.0 support, easy-to-route connection destination (such 3x-ui has) and multihop with balancers support.
-Original project: [https://wg.wgdashboard.dev/](https://wg.wgdashboard.dev/)
+# WGD_AWG_fix_multihop / ONX
 
-## Ubuntu 22.04 / 24.04 installer
+This repository currently contains two parallel tracks:
 
-Run on a clean VPS:
+1. `WGDashboard` fork with:
+- `AmneziaWG 2.0` support
+- multihop routing
+- balancers
+- DNS interception / local DNS routing
+- GeoIP direct routing helpers
+
+2. `ONX` backend-first control-plane prototype for a distributed overlay transport network:
+- node registry
+- SSH-based deployment flow
+- AWG site-to-site link model
+- jobs / retries / locks
+- route policies
+- DNS / Geo / balancer policy models
+- client ingress selection protocol
+- topology graph and weighted path planner
+
+`WGDashboard` remains the legacy operational surface.
+
+`ONX` is the new control-plane under active development.
+
+## Status
+
+Current repository state:
+
+- legacy `WGDashboard` path is installable and usable on Ubuntu
+- `ONX` backend is in alpha stage
+- native ONX install/update flow exists
+- native TLS setup for ONX exists
+- post-install alpha smoke exists
+
+Current ONX limitations:
+
+- no finished UI
+- no full admin auth/ACL layer for all CRUD endpoints yet
+- bearer `token/JWT` auth currently protects only client-routing endpoints
+- no full production HA control-plane yet
+
+## Repository Layout
+
+Main areas:
+
+- `src/` - legacy WGDashboard fork
+- `scripts/` - installers, TLS helpers, smoke checks, auth rotation
+- `onx/` - new ONX backend
+- `docs/architecture/` - ONX design and architecture records
+
+Important architecture docs:
+
+- [ONX_TECHNICAL_DESIGN.md](Q:\MyVeryOwnAwgStS\docs\architecture\ONX_TECHNICAL_DESIGN.md)
+- [ONX_V0_2_BLUEPRINT.md](Q:\MyVeryOwnAwgStS\docs\architecture\ONX_V0_2_BLUEPRINT.md)
+- [ONX_CLIENT_PROTOCOL_V1.md](Q:\MyVeryOwnAwgStS\docs\architecture\ONX_CLIENT_PROTOCOL_V1.md)
+- [ONX_MIGRATIONS.md](Q:\MyVeryOwnAwgStS\docs\architecture\ONX_MIGRATIONS.md)
+- [ADR-0004-control-plane-ha.md](Q:\MyVeryOwnAwgStS\docs\architecture\ADR-0004-control-plane-ha.md)
+- [ADR-0005-interface-runtime-isolation.md](Q:\MyVeryOwnAwgStS\docs\architecture\ADR-0005-interface-runtime-isolation.md)
+- [ADR-0006-job-retry-and-cancel.md](Q:\MyVeryOwnAwgStS\docs\architecture\ADR-0006-job-retry-and-cancel.md)
+- [ADR-0007-job-target-locking.md](Q:\MyVeryOwnAwgStS\docs\architecture\ADR-0007-job-target-locking.md)
+
+## Legacy WGDashboard Install
+
+Ubuntu 22.04 / 24.04:
 
 ```bash
 sudo apt-get update && sudo apt-get install -y git
@@ -12,24 +71,28 @@ cd WGD_AWG_fix_multihop
 sudo bash scripts/install_ubuntu.sh
 ```
 
-Installer now auto-installs missing AWG components from official repos:
+What the installer can auto-install:
+
 - `amneziawg-tools` (`awg`, `awg-quick`)
 - `amneziawg-go`
-- Node.js/npm (for frontend build)
+- `nodejs` / `npm` for frontend build
 
-If you want to skip that behavior, use:
-
-```bash
-sudo bash scripts/install_ubuntu.sh --no-install-awg --no-install-node --no-build-frontend
-```
-
-One-command deploy with ready inbound `wg0` (keys + NAT + interface up):
+Skip AWG / Node install if needed:
 
 ```bash
-sudo bash scripts/install_ubuntu.sh --bootstrap-inbound wg0
+sudo bash scripts/install_ubuntu.sh \
+  --no-install-awg \
+  --no-install-node \
+  --no-build-frontend
 ```
 
-Enable HTTPS (OpenSSL self-signed cert + nginx reverse proxy):
+Bootstrap ready inbound in one command:
+
+```bash
+sudo bash scripts/install_ubuntu.sh --bootstrap-inbound awg0 --bootstrap-protocol awg
+```
+
+Enable HTTPS for WGDashboard:
 
 ```bash
 sudo bash scripts/install_ubuntu.sh \
@@ -39,34 +102,33 @@ sudo bash scripts/install_ubuntu.sh \
   --tls-ip <SERVER_PUBLIC_IP>
 ```
 
-Optional TLS flags:
-- `--tls-domain <fqdn>`: put DNS SAN/CN into cert
-- `--tls-cert-days <num>`: cert validity
-- `--tls-https-port <port>`: nginx HTTPS port (default `443`)
-- `--tls-force`: regenerate cert files
-- `--no-tls-local-bind`: keep panel on public `app_ip` instead of `127.0.0.1`
+Optional WGDashboard TLS flags:
 
-Example for AWG inbound:
+- `--tls-domain <fqdn>`
+- `--tls-cert-days <num>`
+- `--tls-https-port <port>`
+- `--tls-force`
+- `--no-tls-local-bind`
 
-```bash
-sudo bash scripts/install_ubuntu.sh --bootstrap-inbound awg0 --bootstrap-protocol awg --bootstrap-listen-port 51820
-```
+AWG 2.0 bootstrap parameters supported:
 
-Custom AWG sources/refs are supported:
+- `Jc`
+- `Jmin`
+- `Jmax`
+- `S1`
+- `S2`
+- `S3`
+- `S4`
+- `H1`
+- `H2`
+- `H3`
+- `H4`
 
-```bash
-sudo bash scripts/install_ubuntu.sh \
-  --awg-tools-repo https://github.com/amnezia-vpn/amneziawg-tools.git \
-  --awg-tools-ref master \
-  --awg-go-repo https://github.com/amnezia-vpn/amneziawg-go.git \
-  --awg-go-ref master
-```
+Legacy `I1..I5` are not used.
 
-AWG 2.0 bootstrap fields are supported (without legacy `I1..I5`).  
-Supported keys: `Jc`, `Jmin`, `Jmax`, `S1`, `S2`, `S3`, `S4`, `H1`, `H2`, `H3`, `H4`.
-If you do not pass `--awg-*` values, they are randomly generated for each new interface.
+If explicit `--awg-*` values are not passed, installer generates them randomly.
 
-Example with explicit AWG 2.0 values:
+Explicit AWG example:
 
 ```bash
 sudo bash scripts/install_ubuntu.sh \
@@ -81,28 +143,56 @@ sudo bash scripts/install_ubuntu.sh \
   --bootstrap-force
 ```
 
-After install:
+Service checks:
 
 ```bash
 systemctl status wg-dashboard.service --no-pager
 journalctl -u wg-dashboard.service -f
 ```
 
-## ONX native install (no Docker)
+## ONX Overview
 
-Install ONX API + PostgreSQL + systemd service on Ubuntu 22.04/24.04:
+`ONX` lives under `onx/` and is intended as a backend-first control-plane.
+
+Implemented backend surface at this stage:
+
+- health endpoints
+- worker diagnostics
+- jobs queue / retry / cancel / locks
+- nodes CRUD
+- node runtime bootstrap job
+- links CRUD / validate / apply
+- probes API
+- route policies CRUD
+- DNS policies CRUD
+- geo policies CRUD
+- balancers CRUD
+- topology graph API
+- weighted path planner
+- client ingress protocol:
+  - `/bootstrap`
+  - `/probe`
+  - `/best-ingress`
+  - `/session-rebind`
+
+## ONX Native Install
+
+Ubuntu 22.04 / 24.04, no Docker:
 
 ```bash
 cd /opt/wgd-awg-multihop
 sudo bash scripts/install_onx_ubuntu.sh
 ```
 
-Defaults:
+Default install result:
+
 - service: `onx-api.service`
 - bind: `127.0.0.1:8081`
-- env: `/etc/onx/onx.env`
-- DB: local PostgreSQL (`onx` / `onx`)
-- client-routing auth: `token` (auto-generated, saved to `/etc/onx/client-auth.txt`)
+- env file: `/etc/onx/onx.env`
+- auth info: `/etc/onx/client-auth.txt`
+- DB: local PostgreSQL (`onx`)
+- client-routing auth mode: `token`
+- bearer token is auto-generated if not supplied
 
 Useful overrides:
 
@@ -116,7 +206,26 @@ sudo bash scripts/install_onx_ubuntu.sh \
   --postgres-password 'strong-password'
 ```
 
-Install with nginx + self-signed HTTPS immediately:
+Explicit client auth selection:
+
+```bash
+sudo bash scripts/install_onx_ubuntu.sh \
+  --client-auth-mode token_or_jwt \
+  --client-api-tokens "token-a,token-b"
+```
+
+JWT mode at install:
+
+```bash
+sudo bash scripts/install_onx_ubuntu.sh \
+  --client-auth-mode jwt \
+  --client-api-jwt-issuer onyx-control \
+  --client-api-jwt-audience onyx-client
+```
+
+## ONX Native TLS
+
+Install ONX with nginx + self-signed HTTPS immediately:
 
 ```bash
 sudo bash scripts/install_onx_ubuntu.sh \
@@ -124,21 +233,32 @@ sudo bash scripts/install_onx_ubuntu.sh \
   --tls-ip <SERVER_PUBLIC_IP>
 ```
 
-Optional TLS flags:
-- `--tls-domain <fqdn>`: put DNS SAN/CN into cert
-- `--tls-cert-days <num>`: cert validity
-- `--tls-https-port <port>`: nginx HTTPS port (default `443`)
-- `--tls-force`: regenerate cert files
-- `--no-tls-local-bind`: keep ONX API on requested public bind instead of forcing `127.0.0.1`
+Optional ONX TLS flags:
+
+- `--tls-domain <fqdn>`
+- `--tls-cert-days <num>`
+- `--tls-https-port <port>`
+- `--tls-force`
+- `--no-tls-local-bind`
+
+Enable HTTPS later on an existing ONX install:
+
+```bash
+sudo bash scripts/setup_onx_tls_openssl.sh \
+  --ip <SERVER_PUBLIC_IP> \
+  --upstream-host 127.0.0.1 \
+  --upstream-port 8081
+```
+
+## ONX Alpha Smoke
 
 Run smoke automatically right after install:
 
 ```bash
-sudo bash scripts/install_onx_ubuntu.sh \
-  --run-alpha-smoke
+sudo bash scripts/install_onx_ubuntu.sh --run-alpha-smoke
 ```
 
-Strict smoke example (auth + rate-limit):
+Strict smoke example:
 
 ```bash
 sudo bash scripts/install_onx_ubuntu.sh \
@@ -147,14 +267,47 @@ sudo bash scripts/install_onx_ubuntu.sh \
   --smoke-check-rate-limit
 ```
 
-Update ONX in-place:
+Manual smoke:
+
+```bash
+python scripts/onx_alpha_smoke.py --base-url http://127.0.0.1:8081/api/v1
+```
+
+Strict manual smoke:
+
+```bash
+python scripts/onx_alpha_smoke.py \
+  --base-url http://127.0.0.1:8081/api/v1 \
+  --bearer-token "$(sudo awk -F= '/^tokens=/{print $2}' /etc/onx/client-auth.txt | cut -d, -f1)" \
+  --expect-auth \
+  --check-rate-limit
+```
+
+Current smoke covers:
+
+- `/health`
+- `/bootstrap`
+- `/probe`
+- `/best-ingress`
+- `/graph`
+- `/paths/plan`
+- `/session-rebind`
+
+Strict smoke additionally verifies:
+
+- `401` + `WWW-Authenticate: Bearer`
+- `429` + `Retry-After`
+
+## ONX Update
+
+Update ONX in place:
 
 ```bash
 cd /opt/wgd-awg-multihop
 sudo bash scripts/update_onx_ubuntu.sh --ref dev
 ```
 
-Refresh HTTPS/nginx during update:
+Refresh TLS during update:
 
 ```bash
 cd /opt/wgd-awg-multihop
@@ -162,6 +315,14 @@ sudo bash scripts/update_onx_ubuntu.sh \
   --ref dev \
   --refresh-tls-openssl \
   --tls-ip <SERVER_PUBLIC_IP>
+```
+
+## ONX Auth Rotation
+
+Default generated auth data:
+
+```bash
+sudo cat /etc/onx/client-auth.txt
 ```
 
 Rotate client-routing auth without manual env edits:
@@ -179,7 +340,19 @@ sudo bash scripts/rotate_onx_auth.sh \
   --client-api-jwt-audience onyx-client
 ```
 
-Service checks:
+Switch to token-or-jwt:
+
+```bash
+sudo bash scripts/rotate_onx_auth.sh \
+  --client-auth-mode token_or_jwt
+```
+
+Important:
+
+- this auth currently protects only client-routing endpoints
+- it does not yet protect all admin/control-plane CRUD routes
+
+## ONX Service Checks
 
 ```bash
 systemctl status onx-api.service --no-pager
@@ -187,68 +360,43 @@ journalctl -u onx-api.service -f
 curl -fsS http://127.0.0.1:8081/api/v1/health
 ```
 
-Enable HTTPS later for an existing ONX install:
+If HTTPS is enabled:
 
 ```bash
-sudo bash scripts/setup_onx_tls_openssl.sh \
-  --ip <SERVER_PUBLIC_IP> \
-  --upstream-host 127.0.0.1 \
-  --upstream-port 8081
+curl -kfsS https://<SERVER_PUBLIC_IP>/api/v1/health
 ```
 
-## ONX alpha smoke check
+## ONX Client-Routing Auth and Rate Limit
 
-After ONX API is running, you can validate the minimal ingress protocol end-to-end:
+Current supported auth modes:
 
-```bash
-python scripts/onx_alpha_smoke.py --base-url http://127.0.0.1:8081/api/v1
-```
+- `disabled`
+- `token`
+- `jwt`
+- `token_or_jwt`
 
-This checks:
-- `/health`
-- `/bootstrap`
-- `/probe`
-- `/best-ingress`
-- `/graph`
-- `/paths/plan`
-- `/session-rebind`
+Current implementation scope:
 
-Optional strict checks:
+- auth and rate-limit are enforced only for:
+  - `/bootstrap`
+  - `/probe`
+  - `/best-ingress`
+  - `/session-rebind`
 
-```bash
-python scripts/onx_alpha_smoke.py \
-  --base-url http://127.0.0.1:8081/api/v1 \
-  --bearer-token "token-one" \
-  --expect-auth \
-  --check-rate-limit
-```
-
-This additionally verifies:
-- unauthenticated client-routing request gets `401` + `WWW-Authenticate: Bearer`
-- repeated `/session-rebind` gets `429` + `Retry-After`
-
-## ONX client-routing auth and rate-limit (env)
-
-By default native install enables `token` mode and writes generated credentials to:
+Environment examples:
 
 ```bash
-sudo cat /etc/onx/client-auth.txt
-```
-
-Examples:
-
-```bash
-# Auth mode: token | jwt | token_or_jwt | disabled
+# token mode
 export ONX_CLIENT_API_AUTH_MODE=token
 export ONX_CLIENT_API_TOKENS="token-one,token-two"
 
-# Or JWT (HS256)
+# JWT mode (HS256)
 export ONX_CLIENT_API_AUTH_MODE=jwt
 export ONX_CLIENT_API_JWT_SECRET="change-me-long-random-secret"
 export ONX_CLIENT_API_JWT_ISSUER="onyx-control"
 export ONX_CLIENT_API_JWT_AUDIENCE="onyx-client"
 
-# Rate limit
+# rate limit
 export ONX_CLIENT_RATE_LIMIT_ENABLED=true
 export ONX_CLIENT_RL_BOOTSTRAP_IP_RATE_PER_MINUTE=10
 export ONX_CLIENT_RL_PROBE_SESSION_RATE_PER_MINUTE=120
@@ -258,12 +406,33 @@ export ONX_CLIENT_RL_REBIND_SESSION_RATE_PER_MINUTE=20
 
 When limited, endpoints return `429` with `Retry-After`.
 
-## MultiHop GeoIP Direct (backend)
+## GeoIP Direct in Legacy Multihop
 
-MultiHop supports GeoIP direct routing via `ipset`:
-- `GeoDirectEnabled`: enable/disable GeoIP direct mode
-- `GeoDirectCountries`: comma-separated ISO country codes (example: `ru,kz`)
-- `GeoDirectSourceTemplate`: URL template with `{country}` placeholder  
-  default: `https://www.ipdeny.com/ipblocks/data/aggregated/{country}-aggregated.zone`
+Legacy multihop backend supports GeoIP direct routing via `ipset`.
 
-When enabled, destination CIDRs for selected countries are loaded into `ipset` and traffic to them is kept on the main route (direct), while the rest follows MultiHop routing.
+Relevant fields:
+
+- `GeoDirectEnabled`
+- `GeoDirectCountries`
+- `GeoDirectSourceTemplate`
+
+Default source template:
+
+- `https://www.ipdeny.com/ipblocks/data/aggregated/{country}-aggregated.zone`
+
+Behavior:
+
+- selected country CIDRs are loaded into `ipset`
+- traffic to them stays on the main route
+- the rest follows multihop policy route
+
+## Branching Note
+
+Current active ONX work is happening in `dev`.
+
+If you want the latest ONX alpha changes:
+
+```bash
+git checkout dev
+git pull --ff-only origin dev
+```
