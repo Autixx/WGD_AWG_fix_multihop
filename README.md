@@ -88,6 +88,21 @@ systemctl status wg-dashboard.service --no-pager
 journalctl -u wg-dashboard.service -f
 ```
 
+## ONX alpha smoke check
+
+After ONX API is running, you can validate the minimal ingress protocol end-to-end:
+
+```bash
+python scripts/onx_alpha_smoke.py --base-url http://127.0.0.1:8081/api/v1
+```
+
+This checks:
+- `/health`
+- `/bootstrap`
+- `/probe`
+- `/best-ingress`
+- `/session-rebind`
+
 ## MultiHop GeoIP Direct (backend)
 
 MultiHop supports GeoIP direct routing via `ipset`:
