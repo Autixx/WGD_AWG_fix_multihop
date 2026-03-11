@@ -227,6 +227,80 @@ class RoutePolicyService:
             "message": "Route policy applied successfully.",
         }
 
+    def plan_policy(self, db: Session, policy: RoutePolicy) -> dict:
+        node = db.get(Node, policy.node_id)
+        if node is None:
+            raise ValueError("Target node not found.")
+
+        dns_policy = self._dns_policies.get_for_route_policy(db, policy.id)
+        geo_policies = self._geo_policies.list_for_route_policy(db, policy.id, only_enabled=True)
+        warnings: list[str] = []
+        state: dict | None = None
+        resolved_target_interface: str | None = None
+        resolved_target_gateway: str | None = None
+        balancer_pick: dict | None = None
+
+        route_apply_script: str | None = None
+        route_cleanup_script: str | None = None
+        dns_apply_script: str | None = None
+        dns_cleanup_script: str | None = None
+        geo_cleanup_script: str | None = None
+
+        if policy.enabled:
+            resolved_target, resolve_warnings = self._resolve_plan_target(db, policy=policy)
+            warnings.extend(resolve_warnings)
+            geo_entries = self._build_geo_entries(policy, geo_policies)
+            state = self._build_state(
+                policy,
+                geo_entries=geo_entries,
+                target_interface=resolved_target["target_interface"],
+                target_gateway=resolved_target.get("target_gateway"),
+                balancer_pick=resolved_target.get("balancer_pick"),
+            )
+            resolved_target_interface = state["target_interface"]
+            resolved_target_gateway = state.get("target_gateway")
+            balancer_pick = state.get("balancer_pick")
+
+            route_apply_script = self._render_apply_script(state)
+            route_cleanup_script = self._render_cleanup_script(state)
+            if geo_entries:
+                geo_cleanup_script = self._render_geo_cleanup_script(geo_entries)
+
+            if dns_policy is not None and dns_policy.enabled:
+                dns_state = self._build_dns_state(policy, dns_policy)
+                dns_apply_script = self._render_dns_apply_script(dns_state)
+                dns_cleanup_script = self._render_dns_cleanup_script(dns_state)
+            elif dns_policy is not None and dns_policy.applied_state:
+                dns_cleanup_script = self._render_dns_cleanup_script(dns_policy.applied_state)
+        else:
+            warnings.append("Policy is disabled; apply would remove existing rules.")
+            if policy.applied_state:
+                route_cleanup_script = self._render_cleanup_script(policy.applied_state)
+                if policy.applied_state.get("geo_entries"):
+                    geo_cleanup_script = self._render_geo_cleanup_script(policy.applied_state["geo_entries"])
+            if dns_policy is not None and dns_policy.applied_state:
+                dns_cleanup_script = self._render_dns_cleanup_script(dns_policy.applied_state)
+
+        return {
+            "policy_id": policy.id,
+            "node_id": policy.node_id,
+            "enabled": policy.enabled,
+            "action": policy.action.value,
+            "resolved_target_interface": resolved_target_interface,
+            "resolved_target_gateway": resolved_target_gateway,
+            "balancer_pick": balancer_pick,
+            "warnings": warnings,
+            "state": state,
+            "scripts": {
+                "route_apply": route_apply_script,
+                "route_cleanup": route_cleanup_script,
+                "dns_apply": dns_apply_script,
+                "dns_cleanup": dns_cleanup_script,
+                "geo_cleanup": geo_cleanup_script,
+            },
+            "generated_at": datetime.now(timezone.utc),
+        }
+
     def _normalize_create(self, payload: RoutePolicyCreate) -> dict:
         data = payload.model_dump()
         data["action"] = RoutePolicyAction(data["action"])
@@ -481,6 +555,39 @@ class RoutePolicyService:
             "target_gateway": policy.target_gateway,
             "balancer_pick": None,
         }
+
+    def _resolve_plan_target(self, db: Session, *, policy: RoutePolicy) -> tuple[dict, list[str]]:
+        warnings: list[str] = []
+        if policy.action == RoutePolicyAction.BALANCER:
+            if not policy.balancer_id:
+                raise ValueError("Policy action is 'balancer' but balancer_id is not set.")
+            balancer = self._load_policy_balancer(db, policy)
+            pick = self._balancers.pick_member_from_cache(db, balancer)
+            details = pick.get("details", {}) if isinstance(pick, dict) else {}
+            fallback_reason = details.get("fallback_reason")
+            if fallback_reason:
+                warnings.append(
+                    "No fresh probe metrics for balancer members; planner used random fallback."
+                )
+            return (
+                {
+                    "target_interface": pick["interface_name"],
+                    "target_gateway": pick.get("gateway"),
+                    "balancer_pick": pick,
+                },
+                warnings,
+            )
+
+        if not policy.target_interface:
+            raise ValueError("target_interface is not set for non-balancer route policy.")
+        return (
+            {
+                "target_interface": policy.target_interface,
+                "target_gateway": policy.target_gateway,
+                "balancer_pick": None,
+            },
+            warnings,
+        )
 
     def _load_policy_balancer(self, db: Session, policy: RoutePolicy) -> Balancer:
         balancer = self._balancers.get_balancer(db, policy.balancer_id or "")

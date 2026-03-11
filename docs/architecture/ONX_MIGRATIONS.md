@@ -52,6 +52,7 @@ python -m alembic -c alembic.ini downgrade -1
   - `GET /api/v1/route-policies`
   - `POST /api/v1/route-policies`
   - `GET /api/v1/route-policies/{id}`
+  - `GET /api/v1/route-policies/{id}/plan` (preview rendered scripts and resolved egress target)
   - `PATCH /api/v1/route-policies/{id}`
   - `DELETE /api/v1/route-policies/{id}`
   - `POST /api/v1/route-policies/{id}/apply` (enqueues policy apply job)

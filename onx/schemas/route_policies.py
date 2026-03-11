@@ -79,3 +79,25 @@ class RoutePolicyRead(ONXBaseModel):
     last_applied_at: datetime | None
     created_at: datetime
     updated_at: datetime
+
+
+class RoutePolicyPlanScripts(ONXBaseModel):
+    route_apply: str | None
+    route_cleanup: str | None
+    dns_apply: str | None
+    dns_cleanup: str | None
+    geo_cleanup: str | None
+
+
+class RoutePolicyPlanRead(ONXBaseModel):
+    policy_id: str
+    node_id: str
+    enabled: bool
+    action: RoutePolicyActionValue
+    resolved_target_interface: str | None
+    resolved_target_gateway: str | None
+    balancer_pick: dict | None
+    warnings: list[str]
+    state: dict | None
+    scripts: RoutePolicyPlanScripts
+    generated_at: datetime

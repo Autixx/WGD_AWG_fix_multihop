@@ -5,7 +5,12 @@ from onx.api.deps import get_database_session
 from onx.db.models.job import JobKind, JobTargetType
 from onx.db.models.route_policy import RoutePolicy
 from onx.schemas.jobs import JobEnqueueOptions, JobRead
-from onx.schemas.route_policies import RoutePolicyCreate, RoutePolicyRead, RoutePolicyUpdate
+from onx.schemas.route_policies import (
+    RoutePolicyCreate,
+    RoutePolicyPlanRead,
+    RoutePolicyRead,
+    RoutePolicyUpdate,
+)
 from onx.services.job_service import JobConflictError, JobService
 from onx.services.route_policy_service import RoutePolicyConflictError, RoutePolicyService
 
@@ -39,6 +44,17 @@ def get_route_policy(policy_id: str, db: Session = Depends(get_database_session)
     if policy is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Route policy not found.")
     return policy
+
+
+@router.get("/{policy_id}/plan", response_model=RoutePolicyPlanRead)
+def plan_route_policy(policy_id: str, db: Session = Depends(get_database_session)) -> RoutePolicyPlanRead:
+    policy = route_policy_service.get_policy(db, policy_id)
+    if policy is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Route policy not found.")
+    try:
+        return RoutePolicyPlanRead.model_validate(route_policy_service.plan_policy(db, policy))
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
 
 
 @router.patch("/{policy_id}", response_model=RoutePolicyRead)

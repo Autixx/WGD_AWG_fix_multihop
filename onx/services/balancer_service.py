@@ -141,12 +141,120 @@ class BalancerService:
         db.refresh(balancer)
         return pick
 
+    def pick_member_from_cache(
+        self,
+        db: Session,
+        balancer: Balancer,
+        *,
+        max_age_seconds: int = 120,
+    ) -> dict:
+        if not balancer.enabled:
+            raise ValueError("Balancer is disabled.")
+        members = list(balancer.members or [])
+        if not members:
+            raise ValueError("Balancer has no members.")
+
+        method = BalancerMethod(balancer.method)
+        if method == BalancerMethod.RANDOM:
+            selected = self._pick_random_member(members)
+            return {
+                "interface_name": selected["interface_name"],
+                "gateway": selected.get("gateway"),
+                "method": method.value,
+                "score": None,
+                "details": {
+                    "weights": {m["interface_name"]: m.get("weight", 1) for m in members},
+                    "selection_source": "random",
+                },
+            }
+        if method == BalancerMethod.LEASTLOAD:
+            return self._pick_from_cache(
+                db,
+                balancer=balancer,
+                members=members,
+                probe_type=ProbeType.INTERFACE_LOAD,
+                method=method,
+                details_key="loads",
+                max_age_seconds=max_age_seconds,
+            )
+        if method == BalancerMethod.LEASTPING:
+            return self._pick_from_cache(
+                db,
+                balancer=balancer,
+                members=members,
+                probe_type=ProbeType.PING,
+                method=method,
+                details_key="pings",
+                max_age_seconds=max_age_seconds,
+            )
+        raise ValueError(f"Unsupported balancer method '{method.value}'.")
+
     def _pick_random_member(self, members: list[dict]) -> dict:
         weighted_pool: list[dict] = []
         for member in members:
             weight = max(1, int(member.get("weight", 1)))
             weighted_pool.extend([member] * weight)
         return random.choice(weighted_pool)
+
+    def _pick_from_cache(
+        self,
+        db: Session,
+        *,
+        balancer: Balancer,
+        members: list[dict],
+        probe_type: ProbeType,
+        method: BalancerMethod,
+        details_key: str,
+        max_age_seconds: int,
+    ) -> dict:
+        best_member: dict | None = None
+        best_score = float("inf")
+        scores: dict[str, float | None] = {}
+        sources: dict[str, str] = {}
+        for member in members:
+            iface = member["interface_name"]
+            cached = self._probes.get_recent_metric(
+                db,
+                balancer_id=balancer.id,
+                member_interface=iface,
+                probe_type=probe_type,
+                max_age_seconds=max_age_seconds,
+            )
+            if cached is None:
+                scores[iface] = None
+                sources[iface] = "cache_miss"
+                continue
+
+            scores[iface] = cached
+            sources[iface] = "cache"
+            if cached < best_score:
+                best_score = cached
+                best_member = member
+
+        details = {
+            details_key: scores,
+            "sources": sources,
+            "selection_source": "cache",
+        }
+        if best_member is None:
+            fallback = self._pick_random_member(members)
+            details["selection_source"] = "fallback_random"
+            details["fallback_reason"] = "no_fresh_probe_metrics"
+            return {
+                "interface_name": fallback["interface_name"],
+                "gateway": fallback.get("gateway"),
+                "method": method.value,
+                "score": None,
+                "details": details,
+            }
+
+        return {
+            "interface_name": best_member["interface_name"],
+            "gateway": best_member.get("gateway"),
+            "method": method.value,
+            "score": best_score,
+            "details": details,
+        }
 
     def _pick_leastload_member(
         self,
