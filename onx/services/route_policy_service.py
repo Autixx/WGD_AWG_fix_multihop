@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import hashlib
 import ipaddress
+import json
 import re
 import shlex
 from datetime import datetime, timezone
@@ -227,6 +229,138 @@ class RoutePolicyService:
             "message": "Route policy applied successfully.",
         }
 
+    def apply_planned_policy(
+        self,
+        db: Session,
+        policy: RoutePolicy,
+        *,
+        planned: dict,
+        enforce_snapshot: bool = True,
+        progress_callback: Callable[[str], None] | None = None,
+    ) -> dict:
+        planned_policy_id = str(planned.get("policy_id") or "")
+        if planned_policy_id != policy.id:
+            raise ValueError("Planned policy id does not match the target policy.")
+
+        expected_fingerprint = str(planned.get("fingerprint") or "")
+        if not expected_fingerprint:
+            raise ValueError("Planned payload does not contain fingerprint.")
+        computed_fingerprint = self._plan_fingerprint(planned)
+        if computed_fingerprint != expected_fingerprint:
+            raise ValueError("Planned payload fingerprint is invalid.")
+
+        if enforce_snapshot:
+            self._validate_plan_snapshot(db, policy, planned.get("snapshot"))
+
+        node = db.get(Node, policy.node_id)
+        if node is None:
+            raise ValueError("Target node not found.")
+        if progress_callback:
+            progress_callback("loading management secret")
+        secret = self._get_management_secret(db, node)
+        dns_policy = self._dns_policies.get_for_route_policy(db, policy.id)
+
+        previous_state = policy.applied_state or {}
+        if previous_state:
+            if progress_callback:
+                progress_callback("cleaning previously applied route policy rules")
+            self._run_remote_script(
+                node,
+                secret,
+                self._render_cleanup_script(previous_state),
+                f"cleanup-{policy.id}",
+            )
+        self._cleanup_geo_policy_if_needed(
+            node,
+            secret,
+            previous_state,
+            progress_callback=progress_callback,
+        )
+        self._cleanup_dns_policy_if_needed(
+            node,
+            secret,
+            dns_policy,
+            progress_callback=progress_callback,
+        )
+
+        scripts = planned.get("scripts") or {}
+        enabled = bool(planned.get("enabled"))
+        if not enabled:
+            policy.applied_state = None
+            policy.last_applied_at = datetime.now(timezone.utc)
+            db.add(policy)
+            if dns_policy is not None:
+                dns_policy.applied_state = None
+                dns_policy.last_applied_at = datetime.now(timezone.utc)
+                db.add(dns_policy)
+            db.commit()
+            db.refresh(policy)
+            if dns_policy is not None:
+                db.refresh(dns_policy)
+            return {
+                "policy": policy,
+                "message": "Planned apply completed: policy disabled and rules removed.",
+            }
+
+        route_script = scripts.get("route_apply")
+        if not isinstance(route_script, str) or len(route_script.strip()) == 0:
+            raise ValueError("Planned route_apply script is missing.")
+        if progress_callback:
+            progress_callback("applying planned route policy rules")
+        self._run_remote_script(
+            node,
+            secret,
+            route_script,
+            f"planned-apply-{policy.id}",
+        )
+
+        planned_state = planned.get("state")
+        if not isinstance(planned_state, dict):
+            raise ValueError("Planned route state is missing.")
+        policy.applied_state = {
+            **planned_state,
+            "applied_at": datetime.now(timezone.utc).isoformat(),
+            "node_id": policy.node_id,
+            "policy_id": policy.id,
+            "policy_name": policy.name,
+            "plan_fingerprint": expected_fingerprint,
+        }
+        policy.last_applied_at = datetime.now(timezone.utc)
+        db.add(policy)
+
+        if dns_policy is not None:
+            planned_dns_state = planned.get("dns_state")
+            dns_apply_script = scripts.get("dns_apply")
+            if isinstance(planned_dns_state, dict) and isinstance(dns_apply_script, str) and dns_apply_script.strip():
+                if progress_callback:
+                    progress_callback("applying planned dns capture rules")
+                self._run_remote_script(
+                    node,
+                    secret,
+                    dns_apply_script,
+                    f"planned-dns-apply-{dns_policy.id}",
+                )
+                dns_policy.applied_state = {
+                    **planned_dns_state,
+                    "applied_at": datetime.now(timezone.utc).isoformat(),
+                    "route_policy_id": policy.id,
+                    "dns_policy_id": dns_policy.id,
+                    "plan_fingerprint": expected_fingerprint,
+                }
+            else:
+                dns_policy.applied_state = None
+            dns_policy.last_applied_at = datetime.now(timezone.utc)
+            db.add(dns_policy)
+
+        db.commit()
+        db.refresh(policy)
+        if dns_policy is not None:
+            db.refresh(dns_policy)
+        return {
+            "policy": policy,
+            "message": "Planned route policy applied successfully.",
+        }
+
     def plan_policy(self, db: Session, policy: RoutePolicy) -> dict:
         node = db.get(Node, policy.node_id)
         if node is None:
@@ -239,6 +373,7 @@ class RoutePolicyService:
         resolved_target_interface: str | None = None
         resolved_target_gateway: str | None = None
         balancer_pick: dict | None = None
+        dns_state: dict | None = None
 
         route_apply_script: str | None = None
         route_cleanup_script: str | None = None
@@ -281,7 +416,8 @@ class RoutePolicyService:
             if dns_policy is not None and dns_policy.applied_state:
                 dns_cleanup_script = self._render_dns_cleanup_script(dns_policy.applied_state)
 
-        return {
+        snapshot = self._build_plan_snapshot(db, policy, dns_policy, geo_policies)
+        plan = {
             "policy_id": policy.id,
             "node_id": policy.node_id,
             "enabled": policy.enabled,
@@ -291,6 +427,8 @@ class RoutePolicyService:
             "balancer_pick": balancer_pick,
             "warnings": warnings,
             "state": state,
+            "dns_state": dns_state,
+            "snapshot": snapshot,
             "scripts": {
                 "route_apply": route_apply_script,
                 "route_cleanup": route_cleanup_script,
@@ -300,6 +438,8 @@ class RoutePolicyService:
             },
             "generated_at": datetime.now(timezone.utc),
         }
+        plan["fingerprint"] = self._plan_fingerprint(plan)
+        return plan
 
     def _normalize_create(self, payload: RoutePolicyCreate) -> dict:
         data = payload.model_dump()
@@ -588,6 +728,95 @@ class RoutePolicyService:
             },
             warnings,
         )
+
+    def _build_plan_snapshot(
+        self,
+        db: Session,
+        policy: RoutePolicy,
+        dns_policy: DNSPolicy | None,
+        geo_policies: list[GeoPolicy],
+    ) -> dict:
+        balancer_updated_at: str | None = None
+        if policy.balancer_id:
+            balancer = self._balancers.get_balancer(db, policy.balancer_id)
+            balancer_updated_at = self._iso(balancer.updated_at) if balancer is not None else None
+        return {
+            "policy_updated_at": self._iso(policy.updated_at),
+            "dns_policy_updated_at": self._iso(dns_policy.updated_at) if dns_policy is not None else None,
+            "geo_policies": [
+                {
+                    "id": geo.id,
+                    "updated_at": self._iso(geo.updated_at),
+                }
+                for geo in sorted(geo_policies, key=lambda item: item.id)
+            ],
+            "balancer_updated_at": balancer_updated_at,
+        }
+
+    def _validate_plan_snapshot(self, db: Session, policy: RoutePolicy, snapshot: dict | None) -> None:
+        if not isinstance(snapshot, dict):
+            raise ValueError("Planned snapshot is missing.")
+
+        expected_policy_updated_at = str(snapshot.get("policy_updated_at") or "")
+        if self._iso(policy.updated_at) != expected_policy_updated_at:
+            raise ValueError("Route policy changed after plan generation. Refresh the plan and retry.")
+
+        dns_policy = self._dns_policies.get_for_route_policy(db, policy.id)
+        expected_dns_updated_at = snapshot.get("dns_policy_updated_at")
+        actual_dns_updated_at = self._iso(dns_policy.updated_at) if dns_policy is not None else None
+        if actual_dns_updated_at != expected_dns_updated_at:
+            raise ValueError("DNS policy changed after plan generation. Refresh the plan and retry.")
+
+        expected_geo_items = snapshot.get("geo_policies") or []
+        if not isinstance(expected_geo_items, list):
+            raise ValueError("Planned geo snapshot is invalid.")
+        geo_policies = self._geo_policies.list_for_route_policy(db, policy.id, only_enabled=True)
+        actual_geo_items = [
+            {"id": geo.id, "updated_at": self._iso(geo.updated_at)}
+            for geo in sorted(geo_policies, key=lambda item: item.id)
+        ]
+        if actual_geo_items != expected_geo_items:
+            raise ValueError("Geo policies changed after plan generation. Refresh the plan and retry.")
+
+        expected_balancer_updated_at = snapshot.get("balancer_updated_at")
+        actual_balancer_updated_at: str | None = None
+        if policy.balancer_id:
+            balancer = self._balancers.get_balancer(db, policy.balancer_id)
+            actual_balancer_updated_at = self._iso(balancer.updated_at) if balancer is not None else None
+        if actual_balancer_updated_at != expected_balancer_updated_at:
+            raise ValueError("Balancer changed after plan generation. Refresh the plan and retry.")
+
+    @staticmethod
+    def _iso(value: datetime | None) -> str | None:
+        if value is None:
+            return None
+        if value.tzinfo is None:
+            value = value.replace(tzinfo=timezone.utc)
+        return value.astimezone(timezone.utc).isoformat()
+
+    def _plan_fingerprint_source(self, plan: dict) -> dict:
+        scripts = plan.get("scripts") or {}
+        return {
+            "policy_id": plan.get("policy_id"),
+            "node_id": plan.get("node_id"),
+            "enabled": plan.get("enabled"),
+            "action": plan.get("action"),
+            "state": plan.get("state"),
+            "dns_state": plan.get("dns_state"),
+            "snapshot": plan.get("snapshot"),
+            "scripts": {
+                "route_apply": scripts.get("route_apply"),
+                "route_cleanup": scripts.get("route_cleanup"),
+                "dns_apply": scripts.get("dns_apply"),
+                "dns_cleanup": scripts.get("dns_cleanup"),
+                "geo_cleanup": scripts.get("geo_cleanup"),
+            },
+        }
+
+    def _plan_fingerprint(self, plan: dict) -> str:
+        source = self._plan_fingerprint_source(plan)
+        canonical = json.dumps(source, ensure_ascii=True, sort_keys=True, separators=(",", ":"))
+        return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
     def _load_policy_balancer(self, db: Session, policy: RoutePolicy) -> Balancer:
         balancer = self._balancers.get_balancer(db, policy.balancer_id or "")

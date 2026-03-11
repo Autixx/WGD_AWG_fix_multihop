@@ -99,5 +99,15 @@ class RoutePolicyPlanRead(ONXBaseModel):
     balancer_pick: dict | None
     warnings: list[str]
     state: dict | None
+    dns_state: dict | None
+    snapshot: dict
+    fingerprint: str
     scripts: RoutePolicyPlanScripts
     generated_at: datetime
+
+
+class RoutePolicyApplyPlannedRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    plan_fingerprint: str = Field(min_length=64, max_length=64)
+    enforce_snapshot: bool = True

@@ -195,11 +195,25 @@ class JobWorker:
             if policy is None:
                 raise ValueError("Target route policy not found.")
 
-            result = self._route_policies.apply_policy(
-                db,
-                policy,
-                progress_callback=lambda step: self._progress(db, job, step),
-            )
+            request_payload = job.request_payload_json or {}
+            execution_mode = str(request_payload.get("execution_mode") or "live")
+            if execution_mode == "planned":
+                planned_plan = request_payload.get("plan")
+                if not isinstance(planned_plan, dict):
+                    raise ValueError("Planned execution mode requires 'plan' payload.")
+                result = self._route_policies.apply_planned_policy(
+                    db,
+                    policy,
+                    planned=planned_plan,
+                    enforce_snapshot=bool(request_payload.get("enforce_snapshot", True)),
+                    progress_callback=lambda step: self._progress(db, job, step),
+                )
+            else:
+                result = self._route_policies.apply_policy(
+                    db,
+                    policy,
+                    progress_callback=lambda step: self._progress(db, job, step),
+                )
             applied_policy = result["policy"]
             self._jobs.succeed(
                 db,

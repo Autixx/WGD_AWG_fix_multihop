@@ -6,6 +6,7 @@ from onx.db.models.job import JobKind, JobTargetType
 from onx.db.models.route_policy import RoutePolicy
 from onx.schemas.jobs import JobEnqueueOptions, JobRead
 from onx.schemas.route_policies import (
+    RoutePolicyApplyPlannedRequest,
     RoutePolicyCreate,
     RoutePolicyPlanRead,
     RoutePolicyRead,
@@ -107,6 +108,58 @@ def apply_route_policy(
             },
             max_attempts=options.max_attempts if options else None,
             retry_delay_seconds=options.retry_delay_seconds if options else None,
+        )
+    except JobConflictError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "message": str(exc),
+                "existing_job_id": exc.job_id,
+                "existing_job_state": exc.job_state,
+            },
+        ) from exc
+    return job
+
+
+@router.post("/{policy_id}/apply-planned", response_model=JobRead, status_code=status.HTTP_202_ACCEPTED)
+def apply_route_policy_planned(
+    policy_id: str,
+    payload: RoutePolicyApplyPlannedRequest,
+    db: Session = Depends(get_database_session),
+) -> JobRead:
+    policy = route_policy_service.get_policy(db, policy_id)
+    if policy is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Route policy not found.")
+
+    try:
+        plan = route_policy_service.plan_policy(db, policy)
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+
+    if payload.plan_fingerprint != plan["fingerprint"]:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "message": "Plan fingerprint mismatch. Refresh plan and retry apply-planned.",
+                "provided_fingerprint": payload.plan_fingerprint,
+                "current_fingerprint": plan["fingerprint"],
+            },
+        )
+
+    try:
+        job = job_service.create_job(
+            db,
+            kind=JobKind.APPLY,
+            target_type=JobTargetType.POLICY,
+            target_id=policy.id,
+            request_payload={
+                "policy_id": policy.id,
+                "policy_name": policy.name,
+                "node_id": policy.node_id,
+                "execution_mode": "planned",
+                "enforce_snapshot": payload.enforce_snapshot,
+                "plan": plan,
+            },
         )
     except JobConflictError as exc:
         raise HTTPException(

@@ -56,6 +56,7 @@ python -m alembic -c alembic.ini downgrade -1
   - `PATCH /api/v1/route-policies/{id}`
   - `DELETE /api/v1/route-policies/{id}`
   - `POST /api/v1/route-policies/{id}/apply` (enqueues policy apply job)
+  - `POST /api/v1/route-policies/{id}/apply-planned` (enqueues deterministic apply using plan fingerprint + snapshot)
 - dns policy API supports:
   - `GET /api/v1/dns-policies`
   - `POST /api/v1/dns-policies`
