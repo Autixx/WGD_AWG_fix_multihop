@@ -143,7 +143,23 @@ This checks:
 - `/bootstrap`
 - `/probe`
 - `/best-ingress`
+- `/graph`
+- `/paths/plan`
 - `/session-rebind`
+
+Optional strict checks:
+
+```bash
+python scripts/onx_alpha_smoke.py \
+  --base-url http://127.0.0.1:8081/api/v1 \
+  --bearer-token "token-one" \
+  --expect-auth \
+  --check-rate-limit
+```
+
+This additionally verifies:
+- unauthenticated client-routing request gets `401` + `WWW-Authenticate: Bearer`
+- repeated `/session-rebind` gets `429` + `Retry-After`
 
 ## ONX client-routing auth and rate-limit (env)
 
