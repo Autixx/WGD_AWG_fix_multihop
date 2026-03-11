@@ -102,6 +102,7 @@ Defaults:
 - bind: `127.0.0.1:8081`
 - env: `/etc/onx/onx.env`
 - DB: local PostgreSQL (`onx` / `onx`)
+- client-routing auth: `token` (auto-generated, saved to `/etc/onx/client-auth.txt`)
 
 Useful overrides:
 
@@ -142,7 +143,6 @@ Strict smoke example (auth + rate-limit):
 ```bash
 sudo bash scripts/install_onx_ubuntu.sh \
   --run-alpha-smoke \
-  --smoke-bearer-token "token-one" \
   --smoke-expect-auth \
   --smoke-check-rate-limit
 ```
@@ -162,6 +162,21 @@ sudo bash scripts/update_onx_ubuntu.sh \
   --ref dev \
   --refresh-tls-openssl \
   --tls-ip <SERVER_PUBLIC_IP>
+```
+
+Rotate client-routing auth without manual env edits:
+
+```bash
+sudo bash scripts/rotate_onx_auth.sh
+```
+
+Switch to JWT mode and rotate secret:
+
+```bash
+sudo bash scripts/rotate_onx_auth.sh \
+  --client-auth-mode jwt \
+  --client-api-jwt-issuer onyx-control \
+  --client-api-jwt-audience onyx-client
 ```
 
 Service checks:
@@ -213,6 +228,12 @@ This additionally verifies:
 - repeated `/session-rebind` gets `429` + `Retry-After`
 
 ## ONX client-routing auth and rate-limit (env)
+
+By default native install enables `token` mode and writes generated credentials to:
+
+```bash
+sudo cat /etc/onx/client-auth.txt
+```
 
 Examples:
 

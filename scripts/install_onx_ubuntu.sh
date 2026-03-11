@@ -23,6 +23,11 @@ SMOKE_TIMEOUT="${SMOKE_TIMEOUT:-10}"
 SMOKE_EXPECT_AUTH="${SMOKE_EXPECT_AUTH:-false}"
 SMOKE_CHECK_RATE_LIMIT="${SMOKE_CHECK_RATE_LIMIT:-false}"
 SMOKE_BEARER_TOKEN="${SMOKE_BEARER_TOKEN:-}"
+CLIENT_API_AUTH_MODE="${CLIENT_API_AUTH_MODE:-token}"
+CLIENT_API_TOKENS="${CLIENT_API_TOKENS:-}"
+CLIENT_API_JWT_SECRET="${CLIENT_API_JWT_SECRET:-}"
+CLIENT_API_JWT_ISSUER="${CLIENT_API_JWT_ISSUER:-onyx-control}"
+CLIENT_API_JWT_AUDIENCE="${CLIENT_API_JWT_AUDIENCE:-onyx-client}"
 
 INSTALL_POSTGRES="${INSTALL_POSTGRES:-true}"
 CONFIGURE_LOCAL_POSTGRES="${CONFIGURE_LOCAL_POSTGRES:-true}"
@@ -61,6 +66,11 @@ Options:
   --smoke-expect-auth           Expect 401 on unauthenticated client-routing requests
   --smoke-check-rate-limit      Expect 429/Retry-After on repeated session-rebind
   --smoke-bearer-token <token>  Bearer token or JWT for strict smoke mode
+  --client-auth-mode <mode>     disabled | token | jwt | token_or_jwt (default: token)
+  --client-api-tokens <csv>     Static bearer token list for client-routing auth
+  --client-api-jwt-secret <v>   HS256 JWT secret for client-routing auth
+  --client-api-jwt-issuer <v>   JWT issuer hint written to env (default: onyx-control)
+  --client-api-jwt-audience <v> JWT audience hint written to env (default: onyx-client)
   --no-install-postgres         Skip postgresql package install
   --no-configure-local-postgres Do not create local db/user via postgres superuser
   --postgres-host <host>        Postgres host (default: 127.0.0.1)
@@ -206,6 +216,26 @@ while [[ $# -gt 0 ]]; do
       SMOKE_BEARER_TOKEN="$2"
       shift 2
       ;;
+    --client-auth-mode)
+      CLIENT_API_AUTH_MODE="$2"
+      shift 2
+      ;;
+    --client-api-tokens)
+      CLIENT_API_TOKENS="$2"
+      shift 2
+      ;;
+    --client-api-jwt-secret)
+      CLIENT_API_JWT_SECRET="$2"
+      shift 2
+      ;;
+    --client-api-jwt-issuer)
+      CLIENT_API_JWT_ISSUER="$2"
+      shift 2
+      ;;
+    --client-api-jwt-audience)
+      CLIENT_API_JWT_AUDIENCE="$2"
+      shift 2
+      ;;
     --no-install-postgres)
       INSTALL_POSTGRES="false"
       shift 1
@@ -275,13 +305,10 @@ fi
 [[ "${TLS_CERT_DAYS}" =~ ^[0-9]+$ ]] || fail "tls-cert-days must be a positive integer."
 (( TLS_CERT_DAYS >= 1 )) || fail "tls-cert-days must be >= 1."
 [[ "${SMOKE_TIMEOUT}" =~ ^[0-9]+([.][0-9]+)?$ ]] || fail "smoke-timeout must be a positive number."
-
-if [[ "${SMOKE_EXPECT_AUTH}" == "true" && -z "${SMOKE_BEARER_TOKEN}" ]]; then
-  fail "--smoke-expect-auth requires --smoke-bearer-token."
-fi
-if [[ "${SMOKE_CHECK_RATE_LIMIT}" == "true" && -z "${SMOKE_BEARER_TOKEN}" ]]; then
-  fail "--smoke-check-rate-limit requires --smoke-bearer-token."
-fi
+case "${CLIENT_API_AUTH_MODE}" in
+  disabled|token|jwt|token_or_jwt) ;;
+  *) fail "client-auth-mode must be one of: disabled, token, jwt, token_or_jwt" ;;
+esac
 
 if [[ -z "${POSTGRES_PASSWORD}" ]]; then
   POSTGRES_PASSWORD="$(openssl rand -hex 24)"
@@ -289,11 +316,22 @@ fi
 if [[ -z "${ONX_MASTER_KEY}" ]]; then
   ONX_MASTER_KEY="$(openssl rand -hex 32)"
 fi
+if [[ "${CLIENT_API_AUTH_MODE}" == "token" || "${CLIENT_API_AUTH_MODE}" == "token_or_jwt" ]]; then
+  if [[ -z "${CLIENT_API_TOKENS}" ]]; then
+    CLIENT_API_TOKENS="onx-$(openssl rand -hex 24)"
+  fi
+fi
+if [[ "${CLIENT_API_AUTH_MODE}" == "jwt" || "${CLIENT_API_AUTH_MODE}" == "token_or_jwt" ]]; then
+  if [[ -z "${CLIENT_API_JWT_SECRET}" ]]; then
+    CLIENT_API_JWT_SECRET="$(openssl rand -hex 32)"
+  fi
+fi
 
 ENV_FILE_PATH="${CONFIG_DIR}/${ENV_FILE_NAME}"
 VENV_DIR="${INSTALL_DIR}/${VENV_DIR_NAME}"
 SERVICE_FILE="/etc/systemd/system/${SERVICE_NAME}.service"
 TLS_UPSTREAM_HOST="${BIND_HOST}"
+CLIENT_AUTH_INFO_PATH="${CONFIG_DIR}/client-auth.txt"
 
 if [[ "${ENABLE_TLS_OPENSSL}" == "true" && "${TLS_LOCAL_BIND}" == "true" ]]; then
   BIND_HOST="127.0.0.1"
@@ -311,6 +349,17 @@ if [[ -z "${SMOKE_BASE_URL}" ]]; then
     SMOKE_HOST="127.0.0.1"
   fi
   SMOKE_BASE_URL="http://${SMOKE_HOST}:${BIND_PORT}/api/v1"
+fi
+if [[ -z "${SMOKE_BEARER_TOKEN}" ]]; then
+  if [[ "${CLIENT_API_AUTH_MODE}" == "token" || "${CLIENT_API_AUTH_MODE}" == "token_or_jwt" ]]; then
+    SMOKE_BEARER_TOKEN="${CLIENT_API_TOKENS%%,*}"
+  fi
+fi
+if [[ "${SMOKE_EXPECT_AUTH}" == "true" && -z "${SMOKE_BEARER_TOKEN}" ]]; then
+  fail "--smoke-expect-auth requires a bearer token. Provide --smoke-bearer-token or use token auth mode."
+fi
+if [[ "${SMOKE_CHECK_RATE_LIMIT}" == "true" && -z "${SMOKE_BEARER_TOKEN}" ]]; then
+  fail "--smoke-check-rate-limit requires a bearer token. Provide --smoke-bearer-token or use token auth mode."
 fi
 
 echo "[1/9] Installing OS dependencies..."
@@ -375,11 +424,11 @@ ONX_DATABASE_URL=${DB_URL}
 ONX_MASTER_KEY=${ONX_MASTER_KEY}
 
 # Client routing auth: disabled | token | jwt | token_or_jwt
-ONX_CLIENT_API_AUTH_MODE=disabled
-ONX_CLIENT_API_TOKENS=
-ONX_CLIENT_API_JWT_SECRET=
-ONX_CLIENT_API_JWT_ISSUER=
-ONX_CLIENT_API_JWT_AUDIENCE=
+ONX_CLIENT_API_AUTH_MODE=${CLIENT_API_AUTH_MODE}
+ONX_CLIENT_API_TOKENS=${CLIENT_API_TOKENS}
+ONX_CLIENT_API_JWT_SECRET=${CLIENT_API_JWT_SECRET}
+ONX_CLIENT_API_JWT_ISSUER=${CLIENT_API_JWT_ISSUER}
+ONX_CLIENT_API_JWT_AUDIENCE=${CLIENT_API_JWT_AUDIENCE}
 
 # Optional tuning
 ONX_WORKER_POLL_INTERVAL_SECONDS=2
@@ -388,6 +437,23 @@ ONX_PROBE_SCHEDULER_ENABLED=true
 ONX_PROBE_SCHEDULER_INTERVAL_SECONDS=30
 EOF
 chmod 600 "${ENV_FILE_PATH}"
+{
+  echo "# Generated by install_onx_ubuntu.sh"
+  echo "mode=${CLIENT_API_AUTH_MODE}"
+  if [[ -n "${CLIENT_API_TOKENS}" ]]; then
+    echo "tokens=${CLIENT_API_TOKENS}"
+  fi
+  if [[ -n "${CLIENT_API_JWT_SECRET}" ]]; then
+    echo "jwt_secret=${CLIENT_API_JWT_SECRET}"
+  fi
+  if [[ -n "${CLIENT_API_JWT_ISSUER}" ]]; then
+    echo "jwt_issuer=${CLIENT_API_JWT_ISSUER}"
+  fi
+  if [[ -n "${CLIENT_API_JWT_AUDIENCE}" ]]; then
+    echo "jwt_audience=${CLIENT_API_JWT_AUDIENCE}"
+  fi
+} > "${CLIENT_AUTH_INFO_PATH}"
+chmod 600 "${CLIENT_AUTH_INFO_PATH}"
 
 echo "[5/9] Creating Python venv..."
 python3 -m venv "${VENV_DIR}"
@@ -487,6 +553,7 @@ echo
 echo "ONX install complete."
 echo "Service:  ${SERVICE_NAME}.service"
 echo "Env file: ${ENV_FILE_PATH}"
+echo "Auth:     ${CLIENT_AUTH_INFO_PATH}"
 echo "Status:   systemctl status ${SERVICE_NAME}.service --no-pager"
 echo "Logs:     journalctl -u ${SERVICE_NAME}.service -f"
 echo "Health:   curl -fsS http://${BIND_HOST}:${BIND_PORT}/api/v1/health"
@@ -496,3 +563,7 @@ fi
 echo
 echo "If needed, edit auth/limits in ${ENV_FILE_PATH} and restart service:"
 echo "  sudo systemctl restart ${SERVICE_NAME}.service"
+if [[ "${CLIENT_API_AUTH_MODE}" != "disabled" ]]; then
+  echo "Client auth mode: ${CLIENT_API_AUTH_MODE}"
+  echo "Client auth file: ${CLIENT_AUTH_INFO_PATH}"
+fi
