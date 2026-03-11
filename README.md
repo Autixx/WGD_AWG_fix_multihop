@@ -130,11 +130,38 @@ Optional TLS flags:
 - `--tls-force`: regenerate cert files
 - `--no-tls-local-bind`: keep ONX API on requested public bind instead of forcing `127.0.0.1`
 
+Run smoke automatically right after install:
+
+```bash
+sudo bash scripts/install_onx_ubuntu.sh \
+  --run-alpha-smoke
+```
+
+Strict smoke example (auth + rate-limit):
+
+```bash
+sudo bash scripts/install_onx_ubuntu.sh \
+  --run-alpha-smoke \
+  --smoke-bearer-token "token-one" \
+  --smoke-expect-auth \
+  --smoke-check-rate-limit
+```
+
 Update ONX in-place:
 
 ```bash
 cd /opt/wgd-awg-multihop
 sudo bash scripts/update_onx_ubuntu.sh --ref dev
+```
+
+Refresh HTTPS/nginx during update:
+
+```bash
+cd /opt/wgd-awg-multihop
+sudo bash scripts/update_onx_ubuntu.sh \
+  --ref dev \
+  --refresh-tls-openssl \
+  --tls-ip <SERVER_PUBLIC_IP>
 ```
 
 Service checks:

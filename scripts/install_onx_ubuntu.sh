@@ -17,6 +17,12 @@ TLS_IP="${TLS_IP:-}"
 TLS_CERT_DAYS="${TLS_CERT_DAYS:-825}"
 TLS_HTTPS_PORT="${TLS_HTTPS_PORT:-443}"
 TLS_FORCE_REGEN="${TLS_FORCE_REGEN:-false}"
+RUN_ALPHA_SMOKE="${RUN_ALPHA_SMOKE:-false}"
+SMOKE_BASE_URL="${SMOKE_BASE_URL:-}"
+SMOKE_TIMEOUT="${SMOKE_TIMEOUT:-10}"
+SMOKE_EXPECT_AUTH="${SMOKE_EXPECT_AUTH:-false}"
+SMOKE_CHECK_RATE_LIMIT="${SMOKE_CHECK_RATE_LIMIT:-false}"
+SMOKE_BEARER_TOKEN="${SMOKE_BEARER_TOKEN:-}"
 
 INSTALL_POSTGRES="${INSTALL_POSTGRES:-true}"
 CONFIGURE_LOCAL_POSTGRES="${CONFIGURE_LOCAL_POSTGRES:-true}"
@@ -49,6 +55,12 @@ Options:
   --tls-https-port <port>       nginx HTTPS listen port (default: 443)
   --tls-force                   Regenerate certificate even if it already exists
   --no-tls-local-bind           Keep ONX API on the requested bind host instead of forcing 127.0.0.1
+  --run-alpha-smoke             Run ONX alpha smoke check after service start
+  --smoke-base-url <url>        Override smoke base URL (default: local ONX API)
+  --smoke-timeout <sec>         Smoke HTTP timeout in seconds (default: 10)
+  --smoke-expect-auth           Expect 401 on unauthenticated client-routing requests
+  --smoke-check-rate-limit      Expect 429/Retry-After on repeated session-rebind
+  --smoke-bearer-token <token>  Bearer token or JWT for strict smoke mode
   --no-install-postgres         Skip postgresql package install
   --no-configure-local-postgres Do not create local db/user via postgres superuser
   --postgres-host <host>        Postgres host (default: 127.0.0.1)
@@ -170,6 +182,30 @@ while [[ $# -gt 0 ]]; do
       TLS_LOCAL_BIND="false"
       shift 1
       ;;
+    --run-alpha-smoke)
+      RUN_ALPHA_SMOKE="true"
+      shift 1
+      ;;
+    --smoke-base-url)
+      SMOKE_BASE_URL="$2"
+      shift 2
+      ;;
+    --smoke-timeout)
+      SMOKE_TIMEOUT="$2"
+      shift 2
+      ;;
+    --smoke-expect-auth)
+      SMOKE_EXPECT_AUTH="true"
+      shift 1
+      ;;
+    --smoke-check-rate-limit)
+      SMOKE_CHECK_RATE_LIMIT="true"
+      shift 1
+      ;;
+    --smoke-bearer-token)
+      SMOKE_BEARER_TOKEN="$2"
+      shift 2
+      ;;
     --no-install-postgres)
       INSTALL_POSTGRES="false"
       shift 1
@@ -228,6 +264,9 @@ validate_bool "${ONX_DEBUG}" || fail "--onx-debug must be true or false."
 validate_bool "${ENABLE_TLS_OPENSSL}" || fail "TLS flag must be true or false."
 validate_bool "${TLS_LOCAL_BIND}" || fail "TLS local bind flag must be true or false."
 validate_bool "${TLS_FORCE_REGEN}" || fail "TLS force flag must be true or false."
+validate_bool "${RUN_ALPHA_SMOKE}" || fail "run-alpha-smoke flag must be true or false."
+validate_bool "${SMOKE_EXPECT_AUTH}" || fail "smoke-expect-auth flag must be true or false."
+validate_bool "${SMOKE_CHECK_RATE_LIMIT}" || fail "smoke-check-rate-limit flag must be true or false."
 validate_name "${POSTGRES_DB}" || fail "Invalid postgres db name: ${POSTGRES_DB}"
 validate_name "${POSTGRES_USER}" || fail "Invalid postgres user name: ${POSTGRES_USER}"
 if [[ "${POSTGRES_PASSWORD}" == *"'"* ]]; then
@@ -235,6 +274,14 @@ if [[ "${POSTGRES_PASSWORD}" == *"'"* ]]; then
 fi
 [[ "${TLS_CERT_DAYS}" =~ ^[0-9]+$ ]] || fail "tls-cert-days must be a positive integer."
 (( TLS_CERT_DAYS >= 1 )) || fail "tls-cert-days must be >= 1."
+[[ "${SMOKE_TIMEOUT}" =~ ^[0-9]+([.][0-9]+)?$ ]] || fail "smoke-timeout must be a positive number."
+
+if [[ "${SMOKE_EXPECT_AUTH}" == "true" && -z "${SMOKE_BEARER_TOKEN}" ]]; then
+  fail "--smoke-expect-auth requires --smoke-bearer-token."
+fi
+if [[ "${SMOKE_CHECK_RATE_LIMIT}" == "true" && -z "${SMOKE_BEARER_TOKEN}" ]]; then
+  fail "--smoke-check-rate-limit requires --smoke-bearer-token."
+fi
 
 if [[ -z "${POSTGRES_PASSWORD}" ]]; then
   POSTGRES_PASSWORD="$(openssl rand -hex 24)"
@@ -257,6 +304,13 @@ elif [[ "${BIND_HOST}" == "::" ]]; then
   TLS_UPSTREAM_HOST="::1"
 else
   TLS_UPSTREAM_HOST="${BIND_HOST}"
+fi
+if [[ -z "${SMOKE_BASE_URL}" ]]; then
+  SMOKE_HOST="${BIND_HOST}"
+  if [[ "${SMOKE_HOST}" == "0.0.0.0" || "${SMOKE_HOST}" == "::" ]]; then
+    SMOKE_HOST="127.0.0.1"
+  fi
+  SMOKE_BASE_URL="http://${SMOKE_HOST}:${BIND_PORT}/api/v1"
 fi
 
 echo "[1/9] Installing OS dependencies..."
@@ -395,6 +449,38 @@ if [[ "${ENABLE_TLS_OPENSSL}" == "true" ]]; then
     TLS_ARGS+=("--force")
   fi
   bash "${INSTALL_DIR}/scripts/setup_onx_tls_openssl.sh" "${TLS_ARGS[@]}"
+fi
+
+if [[ "${RUN_ALPHA_SMOKE}" == "true" ]]; then
+  echo "[smoke] Waiting for ONX API health..."
+  HEALTH_URL="${SMOKE_BASE_URL%/}/health"
+  for _ in $(seq 1 30); do
+    if curl -fsS "${HEALTH_URL}" >/dev/null 2>&1; then
+      break
+    fi
+    sleep 1
+  done
+  curl -fsS "${HEALTH_URL}" >/dev/null 2>&1 || fail "ONX API health check failed before smoke run: ${HEALTH_URL}"
+
+  SMOKE_ARGS=(
+    "--base-url" "${SMOKE_BASE_URL}"
+    "--timeout" "${SMOKE_TIMEOUT}"
+  )
+  if [[ -n "${SMOKE_BEARER_TOKEN}" ]]; then
+    SMOKE_ARGS+=("--bearer-token" "${SMOKE_BEARER_TOKEN}")
+  fi
+  if [[ "${SMOKE_EXPECT_AUTH}" == "true" ]]; then
+    SMOKE_ARGS+=("--expect-auth")
+  fi
+  if [[ "${SMOKE_CHECK_RATE_LIMIT}" == "true" ]]; then
+    SMOKE_ARGS+=("--check-rate-limit")
+  fi
+
+  echo "[smoke] Running ONX alpha smoke..."
+  (
+    cd "${INSTALL_DIR}"
+    "${VENV_DIR}/bin/python3" scripts/onx_alpha_smoke.py "${SMOKE_ARGS[@]}"
+  )
 fi
 
 echo
