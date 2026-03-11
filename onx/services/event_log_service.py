@@ -29,6 +29,25 @@ class EventLogService:
         db.refresh(event)
         return event
 
+    def list_events(
+        self,
+        db: Session,
+        *,
+        limit: int = 100,
+        entity_type: str | None = None,
+        entity_id: str | None = None,
+        level: EventLevel | None = None,
+    ) -> list[EventLog]:
+        stmt = select(EventLog)
+        if entity_type:
+            stmt = stmt.where(EventLog.entity_type == entity_type)
+        if entity_id:
+            stmt = stmt.where(EventLog.entity_id == entity_id)
+        if level is not None:
+            stmt = stmt.where(EventLog.level == level)
+        stmt = stmt.order_by(EventLog.created_at.desc()).limit(limit)
+        return list(db.scalars(stmt).all())
+
     def list_for_job(self, db: Session, job_id: str) -> list[EventLog]:
         return list(
             db.scalars(

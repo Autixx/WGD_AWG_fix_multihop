@@ -4,6 +4,7 @@ from fastapi import FastAPI
 from fastapi import Request
 
 from onx.api.routers.access_rules import router as access_rules_router
+from onx.api.routers.audit_logs import router as audit_logs_router
 from onx.api.routers.balancers import router as balancers_router
 from onx.api.routers.client_routing import router as client_routing_router
 from onx.api.routers.dns_policies import router as dns_policies_router
@@ -62,6 +63,7 @@ def create_app() -> FastAPI:
     app.include_router(health_router, prefix=settings.api_prefix)
     app.include_router(client_routing_router, prefix=settings.api_prefix)
     app.include_router(access_rules_router, prefix=settings.api_prefix)
+    app.include_router(audit_logs_router, prefix=settings.api_prefix)
     app.include_router(jobs_router, prefix=settings.api_prefix)
     app.include_router(nodes_router, prefix=settings.api_prefix)
     app.include_router(links_router, prefix=settings.api_prefix)

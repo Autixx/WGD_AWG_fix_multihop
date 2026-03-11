@@ -24,6 +24,7 @@ class AdminAccessControl:
     DEFAULT_PERMISSION_MATRIX: dict[str, dict] = {
         "access_rules.read": {"roles": ["admin"], "description": "Read API access rules"},
         "access_rules.write": {"roles": ["admin"], "description": "Modify API access rules"},
+        "audit_logs.read": {"roles": ["viewer", "operator", "admin"], "description": "Read audit logs"},
         "worker_health.read": {"roles": ["viewer", "operator", "admin"], "description": "Read worker health"},
         "jobs.read": {"roles": ["viewer", "operator", "admin"], "description": "Read jobs and events"},
         "jobs.write": {"roles": ["operator", "admin"], "description": "Modify jobs and locks"},
@@ -57,7 +58,12 @@ class AdminAccessControl:
         if isinstance(auth_result, JSONResponse):
             return auth_result
 
-        roles = auth_result
+        roles, auth_kind = auth_result
+        request.state.admin_access_context = {
+            "roles": sorted(roles),
+            "auth_kind": auth_kind,
+            "permission_key": permission_key,
+        }
         if "admin" in roles:
             return None
 
@@ -99,6 +105,8 @@ class AdminAccessControl:
 
         if path == f"{prefix}/health/worker":
             return "worker_health.read"
+        if path == f"{prefix}/audit-logs":
+            return "audit_logs.read"
         if path == f"{prefix}/graph":
             return "topology.read"
         if path == f"{prefix}/paths/plan":
@@ -189,10 +197,10 @@ class AdminAccessControl:
             return {str(item).strip().lower() for item in default["roles"] if str(item).strip()}
         return {"admin"}
 
-    def _authenticate(self, request: Request) -> set[str] | JSONResponse:
+    def _authenticate(self, request: Request) -> tuple[set[str], str] | JSONResponse:
         mode = self._settings.admin_api_auth_mode.strip().lower()
         if mode in {"", "disabled", "off", "none"}:
-            return {"admin"}
+            return {"admin"}, "disabled"
 
         token = self._extract_bearer_token(request)
         if token is None:
@@ -209,7 +217,7 @@ class AdminAccessControl:
         if mode == "token_or_jwt":
             token_roles = self._validate_static_token(token)
             if token_roles is not None:
-                return token_roles
+                return token_roles, "token"
             return self._authenticate_jwt(token)
 
         return self._json_error(
@@ -217,7 +225,7 @@ class AdminAccessControl:
             detail=f"Unsupported auth mode '{self._settings.admin_api_auth_mode}'.",
         )
 
-    def _authenticate_token(self, token: str) -> set[str] | JSONResponse:
+    def _authenticate_token(self, token: str) -> tuple[set[str], str] | JSONResponse:
         roles = self._validate_static_token(token)
         if roles is None:
             return self._json_error(
@@ -225,7 +233,7 @@ class AdminAccessControl:
                 detail="Invalid bearer token.",
                 extra_headers={"WWW-Authenticate": "Bearer"},
             )
-        return roles
+        return roles, "token"
 
     def _validate_static_token(self, token: str) -> set[str] | None:
         configured = [
@@ -254,7 +262,7 @@ class AdminAccessControl:
         }
         return roles or {"admin"}, token
 
-    def _authenticate_jwt(self, token: str) -> set[str] | JSONResponse:
+    def _authenticate_jwt(self, token: str) -> tuple[set[str], str] | JSONResponse:
         try:
             payload = self._validate_jwt_hs256(token)
         except ValueError as exc:
@@ -270,7 +278,7 @@ class AdminAccessControl:
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="JWT token does not contain any admin roles.",
             )
-        return roles
+        return roles, "jwt"
 
     def _validate_jwt_hs256(self, token: str) -> dict:
         secret_value = self._settings.admin_api_jwt_secret

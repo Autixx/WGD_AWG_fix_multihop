@@ -5,6 +5,7 @@ SERVICE_NAME="${SERVICE_NAME:-onx-api}"
 CONFIG_DIR="${CONFIG_DIR:-/etc/onx}"
 ENV_FILE_NAME="${ENV_FILE_NAME:-onx.env}"
 AUTH_INFO_FILE_NAME="${AUTH_INFO_FILE_NAME:-admin-auth.txt}"
+VENV_DIR_NAME="${VENV_DIR_NAME:-.venv-onx}"
 ADMIN_API_AUTH_MODE="${ADMIN_API_AUTH_MODE:-}"
 ADMIN_API_TOKENS="${ADMIN_API_TOKENS:-}"
 ADMIN_API_JWT_SECRET="${ADMIN_API_JWT_SECRET:-}"
@@ -116,8 +117,14 @@ fi
 
 ENV_FILE_PATH="${CONFIG_DIR}/${ENV_FILE_NAME}"
 AUTH_INFO_PATH="${CONFIG_DIR}/${AUTH_INFO_FILE_NAME}"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
+PYTHON_BIN="${REPO_ROOT}/${VENV_DIR_NAME}/bin/python3"
 
 [[ -f "${ENV_FILE_PATH}" ]] || fail "ONX env file not found: ${ENV_FILE_PATH}"
+if [[ ! -x "${PYTHON_BIN}" ]]; then
+  PYTHON_BIN="python3"
+fi
 
 current_mode="$(grep '^ONX_ADMIN_API_AUTH_MODE=' "${ENV_FILE_PATH}" | sed 's/^ONX_ADMIN_API_AUTH_MODE=//' || true)"
 current_issuer="$(grep '^ONX_ADMIN_API_JWT_ISSUER=' "${ENV_FILE_PATH}" | sed 's/^ONX_ADMIN_API_JWT_ISSUER=//' || true)"
@@ -182,6 +189,30 @@ chmod 600 "${ENV_FILE_PATH}"
   fi
 } > "${AUTH_INFO_PATH}"
 chmod 600 "${AUTH_INFO_PATH}"
+
+DETAILS_JSON="$("${PYTHON_BIN}" - "${current_mode:-}" "${ADMIN_API_AUTH_MODE}" "${ADMIN_API_TOKENS}" "${ADMIN_API_JWT_SECRET}" "${ADMIN_API_JWT_ISSUER}" "${ADMIN_API_JWT_AUDIENCE}" <<'PY'
+import json
+import sys
+
+previous_mode, new_mode, tokens, jwt_secret, issuer, audience = sys.argv[1:]
+print(json.dumps({
+    "scope": "admin",
+    "previous_mode": previous_mode or None,
+    "new_mode": new_mode,
+    "static_tokens_configured": bool(tokens),
+    "jwt_secret_configured": bool(jwt_secret),
+    "jwt_issuer": issuer or None,
+    "jwt_audience": audience or None,
+}))
+PY
+)"
+"${PYTHON_BIN}" "${REPO_ROOT}/scripts/onx_audit_event.py" \
+  --env-file "${ENV_FILE_PATH}" \
+  --entity-type "auth_rotation" \
+  --entity-id "admin" \
+  --message "Admin API auth rotated." \
+  --level info \
+  --details-json "${DETAILS_JSON}" >/dev/null 2>&1 || echo "Warning: failed to write admin auth audit event." >&2
 
 systemctl restart "${SERVICE_NAME}.service"
 

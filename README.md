@@ -158,6 +158,7 @@ Implemented backend surface at this stage:
 - worker diagnostics
 - access rules CRUD
 - jobs queue / retry / cancel / locks
+- audit logs API
 - nodes CRUD
 - node runtime bootstrap job
 - links CRUD / validate / apply
@@ -406,6 +407,7 @@ Current implementation scope:
 
 - admin auth/ACL is enforced for:
   - `/health/worker`
+  - `/audit-logs`
   - `/jobs/*`
   - `/nodes/*`
   - `/links/*`
@@ -487,6 +489,7 @@ Endpoints:
 
 Examples of permission keys:
 
+- `audit_logs.read`
 - `nodes.read`
 - `nodes.write`
 - `links.read`
@@ -497,6 +500,48 @@ Examples of permission keys:
 - `topology.plan`
 - `access_rules.read`
 - `access_rules.write`
+
+ACL matrix helper commands:
+
+```bash
+# export effective matrix
+python scripts/onx_acl_matrix.py --env-file /etc/onx/onx.env export --output acl-effective.json
+
+# export built-in defaults only
+python scripts/onx_acl_matrix.py --env-file /etc/onx/onx.env export-defaults --output acl-defaults.json
+
+# import overrides
+python scripts/onx_acl_matrix.py --env-file /etc/onx/onx.env import --input acl-effective.json
+
+# replace current DB overrides with file contents
+python scripts/onx_acl_matrix.py --env-file /etc/onx/onx.env import --input acl-effective.json --replace
+```
+
+## ONX Audit Logs
+
+Audit events are stored in `event_logs`.
+
+Currently audited:
+
+- access-rule upsert
+- access-rule delete
+- client auth rotation
+- admin auth rotation
+- ACL matrix import
+
+Read the latest audit entries:
+
+```bash
+curl -H "Authorization: Bearer $(sudo awk -F= '/^primary_token=/{print $2}' /etc/onx/admin-auth.txt)" \
+  "http://127.0.0.1:8081/api/v1/audit-logs?limit=50"
+```
+
+Useful filters:
+
+- `entity_type=access_rule`
+- `entity_type=auth_rotation`
+- `entity_id=client`
+- `level=info`
 
 ## GeoIP Direct in Legacy Multihop
 
