@@ -92,3 +92,6 @@ python -m alembic -c alembic.ini downgrade -1
   - `POST /api/v1/paths/plan` (shortest-path planning by latency/load/loss scoring)
 - background services:
   - probe scheduler periodically refreshes node/link ping+load metrics into `probe_results`
+- client-routing security:
+  - bearer auth for `/bootstrap`, `/probe`, `/best-ingress`, `/session-rebind`
+  - in-memory token bucket rate limits with `429 + Retry-After`

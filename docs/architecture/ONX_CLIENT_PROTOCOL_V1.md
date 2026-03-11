@@ -13,6 +13,20 @@ Endpoints (under `/api/v1`):
 
 The protocol is control-plane only. It does not carry user traffic.
 
+## Access Control
+
+- All client-routing endpoints support bearer auth mode controlled by env:
+  - static token mode
+  - JWT mode (HS256)
+  - token-or-jwt mode
+- When auth is enabled and token is missing/invalid, API returns `401`.
+
+## Rate Limit
+
+- Endpoint-level in-memory token-bucket limits are enabled by env.
+- On excess, API returns `429 Too Many Requests` with `Retry-After` header.
+- `session-rebind` additionally has in-memory cooldown to prevent rapid rebinding loops.
+
 ## 1) Bootstrap
 
 `POST /api/v1/bootstrap`

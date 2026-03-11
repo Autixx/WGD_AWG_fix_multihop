@@ -103,6 +103,31 @@ This checks:
 - `/best-ingress`
 - `/session-rebind`
 
+## ONX client-routing auth and rate-limit (env)
+
+Examples:
+
+```bash
+# Auth mode: token | jwt | token_or_jwt | disabled
+export ONX_CLIENT_API_AUTH_MODE=token
+export ONX_CLIENT_API_TOKENS="token-one,token-two"
+
+# Or JWT (HS256)
+export ONX_CLIENT_API_AUTH_MODE=jwt
+export ONX_CLIENT_API_JWT_SECRET="change-me-long-random-secret"
+export ONX_CLIENT_API_JWT_ISSUER="onyx-control"
+export ONX_CLIENT_API_JWT_AUDIENCE="onyx-client"
+
+# Rate limit
+export ONX_CLIENT_RATE_LIMIT_ENABLED=true
+export ONX_CLIENT_RL_BOOTSTRAP_IP_RATE_PER_MINUTE=10
+export ONX_CLIENT_RL_PROBE_SESSION_RATE_PER_MINUTE=120
+export ONX_CLIENT_RL_BEST_SESSION_RATE_PER_MINUTE=60
+export ONX_CLIENT_RL_REBIND_SESSION_RATE_PER_MINUTE=20
+```
+
+When limited, endpoints return `429` with `Retry-After`.
+
 ## MultiHop GeoIP Direct (backend)
 
 MultiHop supports GeoIP direct routing via `ipset`:
