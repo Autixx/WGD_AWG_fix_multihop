@@ -16,6 +16,10 @@ Device-bound client delivery is further specified in:
 
 - `ONX_DEVICE_IDENTITY_AND_PROFILE_DELIVERY.md`
 
+Subscription and billing architecture is further specified in:
+
+- `ONX_SUBSCRIPTIONS_AND_BILLING.md`
+
 ## Product Definition
 
 `ONX` is a control plane and orchestration system for heterogeneous overlay transport networks.
