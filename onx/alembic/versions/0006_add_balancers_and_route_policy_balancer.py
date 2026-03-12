@@ -1,6 +1,6 @@
 """add balancers and balancer route policy support
 
-Revision ID: 0006_add_balancers_and_route_policy_balancer
+Revision ID: 0006_add_balancer_policy
 Revises: 0005_add_geo_policies
 Create Date: 2026-03-10 20:35:00
 """
@@ -12,7 +12,7 @@ import sqlalchemy as sa
 
 
 # revision identifiers, used by Alembic.
-revision: str = "0006_add_balancers_and_route_policy_balancer"
+revision: str = "0006_add_balancer_policy"
 down_revision: Union[str, Sequence[str], None] = "0005_add_geo_policies"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None

@@ -1,7 +1,7 @@
 """add probe results
 
 Revision ID: 0007_add_probe_results
-Revises: 0006_add_balancers_and_route_policy_balancer
+Revises: 0006_add_balancer_policy
 Create Date: 2026-03-10 21:00:00
 """
 
@@ -13,7 +13,7 @@ import sqlalchemy as sa
 
 # revision identifiers, used by Alembic.
 revision: str = "0007_add_probe_results"
-down_revision: Union[str, Sequence[str], None] = "0006_add_balancers_and_route_policy_balancer"
+down_revision: Union[str, Sequence[str], None] = "0006_add_balancer_policy"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 

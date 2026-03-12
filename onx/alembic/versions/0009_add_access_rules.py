@@ -1,7 +1,7 @@
 """add access rules table
 
 Revision ID: 0009_add_access_rules
-Revises: 0008_add_client_routing_protocol
+Revises: 0008_client_routing
 Create Date: 2026-03-11 22:20:00
 """
 
@@ -13,7 +13,7 @@ import sqlalchemy as sa
 
 # revision identifiers, used by Alembic.
 revision: str = "0009_add_access_rules"
-down_revision: Union[str, Sequence[str], None] = "0008_add_client_routing_protocol"
+down_revision: Union[str, Sequence[str], None] = "0008_client_routing"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 

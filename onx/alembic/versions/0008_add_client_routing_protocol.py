@@ -1,6 +1,6 @@
 """add client routing protocol tables
 
-Revision ID: 0008_add_client_routing_protocol
+Revision ID: 0008_client_routing
 Revises: 0007_add_probe_results
 Create Date: 2026-03-11 20:10:00
 """
@@ -12,7 +12,7 @@ import sqlalchemy as sa
 
 
 # revision identifiers, used by Alembic.
-revision: str = "0008_add_client_routing_protocol"
+revision: str = "0008_client_routing"
 down_revision: Union[str, Sequence[str], None] = "0007_add_probe_results"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
