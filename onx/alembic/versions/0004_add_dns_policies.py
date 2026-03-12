@@ -23,7 +23,7 @@ def upgrade() -> None:
         "dns_policies",
         sa.Column("id", sa.String(length=36), nullable=False),
         sa.Column("route_policy_id", sa.String(length=36), nullable=False),
-        sa.Column("enabled", sa.Boolean(), nullable=False, server_default=sa.text("0")),
+        sa.Column("enabled", sa.Boolean(), nullable=False, server_default=sa.false()),
         sa.Column("dns_address", sa.String(length=64), nullable=False),
         sa.Column("capture_protocols", sa.JSON(), nullable=False),
         sa.Column("capture_ports", sa.JSON(), nullable=False),

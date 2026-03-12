@@ -30,7 +30,7 @@ def upgrade() -> None:
             nullable=False,
         ),
         sa.Column("source_url_template", sa.String(length=512), nullable=False),
-        sa.Column("enabled", sa.Boolean(), nullable=False, server_default=sa.text("1")),
+        sa.Column("enabled", sa.Boolean(), nullable=False, server_default=sa.true()),
         sa.Column("created_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.func.now()),
         sa.Column("updated_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.func.now()),
         sa.ForeignKeyConstraint(["route_policy_id"], ["route_policies.id"], ondelete="CASCADE"),
