@@ -20,6 +20,10 @@ Subscription and billing architecture is further specified in:
 
 - `ONX_SUBSCRIPTIONS_AND_BILLING.md`
 
+Forward sequencing is tracked in:
+
+- `ONX_V0_3_ROADMAP.md`
+
 ## Product Definition
 
 `ONX` is a control plane and orchestration system for heterogeneous overlay transport networks.
