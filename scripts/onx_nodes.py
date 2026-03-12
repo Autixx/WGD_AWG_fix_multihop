@@ -169,6 +169,31 @@ def _print_json(payload: dict | list) -> None:
     sys.stdout.write(json.dumps(payload, indent=2, sort_keys=True) + "\n")
 
 
+def _list_nodes(args: argparse.Namespace) -> int:
+    base_url = _derive_base_url(args.base_url)
+    nodes = _request_json(base_url, "GET", "/nodes", token=args.admin_token)
+    if not isinstance(nodes, list):
+        raise RuntimeError("Unexpected /nodes response.")
+
+    if args.format == "json":
+        _print_json(nodes)
+        return 0
+
+    for node in nodes:
+        print(
+            " | ".join(
+                [
+                    str(node.get("name") or "-"),
+                    str(node.get("id") or "-"),
+                    str(node.get("role") or "-"),
+                    str(node.get("status") or "-"),
+                    str(node.get("ssh_host") or "-"),
+                ]
+            )
+        )
+    return 0
+
+
 def _create_node(base_url: str, admin_token: str | None, args: argparse.Namespace) -> dict:
     name = args.name or _prompt("Node name")
     role = args.role or _prompt_choice("Node role", NODE_ROLES, default="mixed")
@@ -371,6 +396,21 @@ def _provision_node(args: argparse.Namespace) -> int:
     return 0 if str(bootstrap_job["state"]) == "succeeded" else 1
 
 
+def _delete_node(args: argparse.Namespace) -> int:
+    base_url = _derive_base_url(args.base_url)
+    node = _resolve_node(base_url, args.admin_token, args.node_ref)
+    node_label = f"{node.get('name')} ({node.get('id')})"
+    if not args.yes:
+        confirm = _prompt(f"Delete node {node_label}? Type 'yes' to confirm", allow_empty=True)
+        if confirm.strip().lower() != "yes":
+            print("Aborted.")
+            return 1
+
+    _request_json(base_url, "DELETE", f"/nodes/{node['id']}", token=args.admin_token)
+    print(f"deleted: {node_label}")
+    return 0
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Interactive ONX node administration helper.")
     parser.add_argument("--env-file", default=DEFAULT_ENV_FILE, help="Path to ONX env file")
@@ -379,6 +419,10 @@ def main() -> int:
     parser.add_argument("--admin-token", default=None, help="Admin bearer token (auto-read from admin auth file if omitted)")
 
     subparsers = parser.add_subparsers(dest="command", required=True)
+
+    list_parser = subparsers.add_parser("list-nodes", help="List nodes")
+    list_parser.add_argument("--format", choices=("table", "json"), default="table", help="Output format")
+    list_parser.set_defaults(handler=_list_nodes)
 
     add_parser = subparsers.add_parser("add-node", help="Interactively add one node and store its SSH secret")
     add_parser.add_argument("--name", default=None, help="Node name")
@@ -419,6 +463,11 @@ def main() -> int:
     bootstrap_parser.add_argument("--no-wait", action="store_false", dest="wait", help="Only enqueue bootstrap job")
     bootstrap_parser.add_argument("--poll-interval", type=int, default=2, help="Job poll interval in seconds")
     bootstrap_parser.set_defaults(handler=_bootstrap_runtime, wait=True)
+
+    delete_parser = subparsers.add_parser("delete-node", help="Delete a node by name or ID")
+    delete_parser.add_argument("node_ref", help="Node ID or node name")
+    delete_parser.add_argument("-y", "--yes", action="store_true", help="Do not ask for confirmation")
+    delete_parser.set_defaults(handler=_delete_node)
 
     args = parser.parse_args()
     _load_env_file(Path(args.env_file).resolve())

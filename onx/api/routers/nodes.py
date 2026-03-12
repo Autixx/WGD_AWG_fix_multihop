@@ -4,7 +4,7 @@ from sqlalchemy.orm import Session
 
 from onx.api.deps import get_database_session
 from onx.db.models.node import Node
-from onx.db.models.job import JobKind, JobTargetType
+from onx.db.models.job import Job, JobKind, JobState, JobTargetType
 from onx.db.models.node_capability import NodeCapability
 from onx.db.models.node_secret import NodeSecretKind
 from onx.schemas.jobs import JobEnqueueOptions, JobRead
@@ -52,6 +52,32 @@ def get_node(node_id: str, db: Session = Depends(get_database_session)) -> Node:
     if node is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Node not found.")
     return node
+
+
+@router.delete("/{node_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_node(node_id: str, db: Session = Depends(get_database_session)) -> None:
+    node = db.get(Node, node_id)
+    if node is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Node not found.")
+
+    active_job = db.scalar(
+        select(Job).where(
+            Job.target_type == JobTargetType.NODE,
+            Job.target_id == node.id,
+            Job.state.in_([JobState.PENDING, JobState.RUNNING]),
+        )
+    )
+    if active_job is not None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                f"Node '{node.name}' has active job '{active_job.id}' "
+                f"in state '{active_job.state.value}'."
+            ),
+        )
+
+    db.delete(node)
+    db.commit()
 
 
 @router.patch("/{node_id}", response_model=NodeRead)

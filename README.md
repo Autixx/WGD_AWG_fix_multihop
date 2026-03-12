@@ -189,6 +189,7 @@ Implemented backend surface at this stage:
 Interactive local helper for node onboarding:
 
 ```bash
+python scripts/onx_nodes.py list-nodes
 python scripts/onx_nodes.py add-node
 python scripts/onx_nodes.py provision-node
 ```
@@ -217,6 +218,7 @@ Run discovery for an existing node:
 ```bash
 python scripts/onx_nodes.py discover <NODE_ID_OR_NAME>
 python scripts/onx_nodes.py bootstrap-runtime <NODE_ID_OR_NAME>
+python scripts/onx_nodes.py delete-node <NODE_ID_OR_NAME>
 ```
 
 By default both commands wait for the job to finish and print capabilities.
@@ -228,6 +230,8 @@ python scripts/onx_nodes.py --base-url http://127.0.0.1:8081/api/v1 add-node
 python scripts/onx_nodes.py --admin-token "<ADMIN_TOKEN>" discover node-msk-1
 python scripts/onx_nodes.py discover node-msk-1 --no-wait
 python scripts/onx_nodes.py bootstrap-runtime node-msk-1 --no-wait
+python scripts/onx_nodes.py list-nodes
+python scripts/onx_nodes.py delete-node node-msk-1 -y
 ```
 
 ## ONX Native Install
