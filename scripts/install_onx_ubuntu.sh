@@ -374,6 +374,7 @@ fi
 ENV_FILE_PATH="${CONFIG_DIR}/${ENV_FILE_NAME}"
 VENV_DIR="${INSTALL_DIR}/${VENV_DIR_NAME}"
 SERVICE_FILE="/etc/systemd/system/${SERVICE_NAME}.service"
+LAUNCHER_PATH="/usr/local/bin/onx"
 TLS_UPSTREAM_HOST="${BIND_HOST}"
 CLIENT_AUTH_INFO_PATH="${CONFIG_DIR}/client-auth.txt"
 ADMIN_AUTH_INFO_PATH="${CONFIG_DIR}/admin-auth.txt"
@@ -556,7 +557,7 @@ echo "[7/9] Running migrations..."
   "${VENV_DIR}/bin/python3" -m alembic -c alembic.ini upgrade head
 )
 
-echo "[8/9] Installing systemd service..."
+echo "[8/10] Installing systemd service..."
 cat > "${SERVICE_FILE}" <<EOF
 [Unit]
 Description=ONX Control Plane API
@@ -577,7 +578,15 @@ TimeoutStopSec=20
 WantedBy=multi-user.target
 EOF
 
-echo "[9/9] Enabling and starting service..."
+echo "[9/10] Installing ONX launcher..."
+cat > "${LAUNCHER_PATH}" <<EOF
+#!/usr/bin/env bash
+set -euo pipefail
+exec "${VENV_DIR}/bin/python3" "${INSTALL_DIR}/scripts/onx_admin_menu.py" "\$@"
+EOF
+chmod 755 "${LAUNCHER_PATH}"
+
+echo "[10/10] Enabling and starting service..."
 systemctl daemon-reload
 systemctl enable --now "${SERVICE_NAME}.service"
 
@@ -646,6 +655,7 @@ echo "Admin:    ${ADMIN_AUTH_INFO_PATH}"
 echo "Status:   systemctl status ${SERVICE_NAME}.service --no-pager"
 echo "Logs:     journalctl -u ${SERVICE_NAME}.service -f"
 echo "Health:   curl -fsS http://${BIND_HOST}:${BIND_PORT}/api/v1/health"
+echo "Menu:     onx"
 if [[ "${ENABLE_TLS_OPENSSL}" == "true" ]]; then
   echo "HTTPS:    https://${TLS_DOMAIN:-${TLS_IP:-<server-ip>}}:${TLS_HTTPS_PORT}/api/v1/health"
 fi

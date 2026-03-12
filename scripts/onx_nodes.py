@@ -226,6 +226,62 @@ def _create_node(base_url: str, admin_token: str | None, args: argparse.Namespac
     return node
 
 
+def _edit_node(args: argparse.Namespace) -> int:
+    base_url = _derive_base_url(args.base_url)
+    node = _resolve_node(base_url, args.admin_token, args.node_ref)
+
+    print(f"Editing node: {node['name']} ({node['id']})")
+    name = _prompt("Node name", default=str(node.get("name") or ""))
+    role = _prompt_choice("Node role", NODE_ROLES, default=str(node.get("role") or "mixed"))
+    ssh_host = _prompt("SSH host / IP", default=str(node.get("ssh_host") or ""))
+    management_address = _prompt("Management address", default=str(node.get("management_address") or ssh_host))
+    ssh_port = _prompt_int("SSH port", default=int(node.get("ssh_port") or 22))
+    ssh_user = _prompt("SSH user", default=str(node.get("ssh_user") or "root"))
+    auth_type = _prompt_choice("SSH auth type", AUTH_TYPES, default=str(node.get("auth_type") or "private_key"))
+
+    payload = {
+        "name": name,
+        "role": role,
+        "management_address": management_address,
+        "ssh_host": ssh_host,
+        "ssh_port": ssh_port,
+        "ssh_user": ssh_user,
+        "auth_type": auth_type,
+    }
+    updated_node = _request_json(base_url, "PATCH", f"/nodes/{node['id']}", token=args.admin_token, payload=payload)
+    if not isinstance(updated_node, dict):
+        raise RuntimeError("Unexpected node update response.")
+
+    refresh_secret_answer = _prompt(
+        "Update SSH secret? (y/N)",
+        default="n",
+        allow_empty=True,
+    ).strip().lower()
+    if refresh_secret_answer in {"y", "yes"}:
+        secret_value = args.secret_value or _prompt_secret(auth_type, private_key_file=args.private_key_file)
+        secret_kind = "ssh_password" if auth_type == "password" else "ssh_private_key"
+        secret_payload = {
+            "kind": secret_kind,
+            "value": secret_value,
+        }
+        _request_json(
+            base_url,
+            "PUT",
+            f"/nodes/{updated_node['id']}/secret",
+            token=args.admin_token,
+            payload=secret_payload,
+        )
+
+    result = {
+        "status": "ok",
+        "node_id": updated_node["id"],
+        "node_name": updated_node["name"],
+        "role": updated_node["role"],
+    }
+    _print_json(result)
+    return 0
+
+
 def _add_node(args: argparse.Namespace) -> int:
     base_url = _derive_base_url(args.base_url)
     node = _create_node(base_url, args.admin_token, args)
@@ -435,6 +491,12 @@ def main() -> int:
     add_parser.add_argument("--private-key-file", default=None, help="SSH private key path for private_key mode")
     add_parser.add_argument("--secret-value", default=None, help="SSH password or private key content")
     add_parser.set_defaults(handler=_add_node)
+
+    edit_parser = subparsers.add_parser("edit-node", help="Interactively edit an existing node and optionally its SSH secret")
+    edit_parser.add_argument("node_ref", help="Node ID or node name")
+    edit_parser.add_argument("--private-key-file", default=None, help="SSH private key path for private_key mode")
+    edit_parser.add_argument("--secret-value", default=None, help="SSH password or private key content")
+    edit_parser.set_defaults(handler=_edit_node)
 
     provision_parser = subparsers.add_parser(
         "provision-node",

@@ -138,6 +138,7 @@ validate_port "${TLS_UPSTREAM_PORT}" || fail "Invalid tls upstream port: ${TLS_U
 
 ENV_FILE_PATH="${CONFIG_DIR}/${ENV_FILE_NAME}"
 VENV_DIR="${INSTALL_DIR}/${VENV_DIR_NAME}"
+LAUNCHER_PATH="/usr/local/bin/onx"
 
 [[ -d "${INSTALL_DIR}/.git" ]] || fail "Install dir is not a git repo: ${INSTALL_DIR}"
 [[ -f "${INSTALL_DIR}/requirements-onx.txt" ]] || fail "requirements-onx.txt not found in ${INSTALL_DIR}"
@@ -156,6 +157,13 @@ git -C "${INSTALL_DIR}" pull --ff-only origin "${GIT_REF}" || true
 echo "[2/5] Updating Python dependencies..."
 "${VENV_DIR}/bin/python3" -m pip install --upgrade pip wheel setuptools
 "${VENV_DIR}/bin/python3" -m pip install -r "${INSTALL_DIR}/requirements-onx.txt"
+
+cat > "${LAUNCHER_PATH}" <<EOF
+#!/usr/bin/env bash
+set -euo pipefail
+exec "${VENV_DIR}/bin/python3" "${INSTALL_DIR}/scripts/onx_admin_menu.py" "\$@"
+EOF
+chmod 755 "${LAUNCHER_PATH}"
 
 echo "[3/5] Applying migrations..."
 (

@@ -188,10 +188,25 @@ Implemented backend surface at this stage:
 
 Interactive local helper for node onboarding:
 
+Unified terminal menu after install:
+
+```bash
+onx
+```
+
+Menu actions:
+
+- daemon status
+- node create/list/edit/delete by name
+- daemon restart
+- alpha smoke test
+
 ```bash
 python scripts/onx_nodes.py list-nodes
 python scripts/onx_nodes.py add-node
+python scripts/onx_nodes.py edit-node <NODE_ID_OR_NAME>
 python scripts/onx_nodes.py provision-node
+python scripts/onx_nodes.py delete-node <NODE_ID_OR_NAME>
 ```
 
 It will prompt for:
