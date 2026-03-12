@@ -15,17 +15,7 @@ DEFAULT_ADMIN_AUTH_FILE = "/etc/onx/admin-auth.txt"
 DEFAULT_CLIENT_AUTH_FILE = "/etc/onx/client-auth.txt"
 DEFAULT_BASE_URL = "http://127.0.0.1:8081/api/v1"
 DEFAULT_SERVICE_NAME = "onx-api.service"
-
-
-def _clear_screen() -> None:
-    os.system("cls" if os.name == "nt" else "clear")
-
-
-def _pause(message: str = "Нажми Enter, чтобы продолжить...") -> None:
-    try:
-        input(message)
-    except EOFError:
-        pass
+HIDE_NODE_PREFIXES = ("smoke-",)
 
 
 def _read_primary_token(path: Path) -> str | None:
@@ -40,9 +30,57 @@ def _derive_base_url(value: str | None) -> str:
     return nodes_cli._derive_base_url(value)
 
 
+def _enter_alt_screen() -> None:
+    if os.name != "nt":
+        sys.stdout.write("\x1b[?1049h\x1b[H")
+        sys.stdout.flush()
+
+
+def _leave_alt_screen() -> None:
+    if os.name != "nt":
+        sys.stdout.write("\x1b[?1049l")
+        sys.stdout.flush()
+
+
+def _render(lines: list[str]) -> None:
+    if os.name == "nt":
+        os.system("cls")
+        sys.stdout.write("\n".join(lines) + "\n")
+        sys.stdout.flush()
+        return
+    sys.stdout.write("\x1b[H\x1b[J")
+    sys.stdout.write("\n".join(lines))
+    if not lines or lines[-1] != "":
+        sys.stdout.write("\n")
+    sys.stdout.flush()
+
+
+def _pause(message: str = "Press Enter to continue...") -> None:
+    try:
+        input(message)
+    except EOFError:
+        pass
+
+
 def _run_command(command: list[str], *, cwd: Path | None = None) -> int:
     completed = subprocess.run(command, cwd=str(cwd) if cwd else None, check=False)
     return completed.returncode
+
+
+def _fetch_nodes(base_url: str, admin_token: str | None) -> list[dict]:
+    payload = nodes_cli._request_json(base_url, "GET", "/nodes", token=admin_token)
+    if not isinstance(payload, list):
+        raise RuntimeError("Unexpected /nodes response.")
+    return payload
+
+
+def _is_user_managed_node(node: dict) -> bool:
+    name = str(node.get("name") or "")
+    return not any(name.startswith(prefix) for prefix in HIDE_NODE_PREFIXES)
+
+
+def _user_nodes(base_url: str, admin_token: str | None) -> list[dict]:
+    return [node for node in _fetch_nodes(base_url, admin_token) if _is_user_managed_node(node)]
 
 
 def _health_summary(base_url: str) -> str:
@@ -66,48 +104,6 @@ def _service_summary(service_name: str) -> str:
     )
     status = (result.stdout or result.stderr).strip() or "unknown"
     return f"daemon={status}"
-
-
-def _status_screen(base_url: str, service_name: str) -> None:
-    _clear_screen()
-    print("ONX")
-    print()
-    print(_service_summary(service_name))
-    print(_health_summary(base_url))
-    print()
-    _run_command(["systemctl", "status", service_name, "--no-pager"])
-    _pause()
-
-
-def _list_nodes(base_url: str, admin_token: str | None) -> None:
-    _clear_screen()
-    print("ONX / Nodes")
-    print()
-    try:
-        nodes = nodes_cli._request_json(base_url, "GET", "/nodes", token=admin_token)
-    except Exception as exc:
-        print(f"Ошибка: {exc}")
-        _pause()
-        return
-
-    if not isinstance(nodes, list) or not nodes:
-        print("Нод пока нет.")
-        _pause()
-        return
-
-    header = f"{'NAME':<24} {'ROLE':<10} {'STATUS':<12} {'SSH':<24} {'MGMT':<24}"
-    print(header)
-    print("-" * len(header))
-    for node in nodes:
-        print(
-            f"{str(node.get('name') or '-'):<24} "
-            f"{str(node.get('role') or '-'):<10} "
-            f"{str(node.get('status') or '-'):<12} "
-            f"{str(node.get('ssh_host') or '-'):<24} "
-            f"{str(node.get('management_address') or '-'):<24}"
-        )
-    print()
-    _pause()
 
 
 def _build_nodes_args(
@@ -139,108 +135,243 @@ def _build_nodes_args(
     )
 
 
-def _create_node(base_url: str, admin_token: str | None) -> None:
-    _clear_screen()
-    print("ONX / Create Node")
+def _show_command_screen(title: str, command: list[str]) -> None:
+    _render([title, "", "Running command...", ""])
+    rc = _run_command(command)
     print()
+    print(f"Exit code: {rc}")
+    print()
+    _pause()
+
+
+def _status_screen(base_url: str, service_name: str) -> None:
+    _render(
+        [
+            "ONX / Daemon Status",
+            "",
+            _service_summary(service_name),
+            _health_summary(base_url),
+            "",
+            "Detailed systemd status follows.",
+            "",
+        ]
+    )
+    _run_command(["systemctl", "status", service_name, "--no-pager", "--lines=20"])
+    print()
+    _pause()
+
+
+def _list_nodes_screen(base_url: str, admin_token: str | None) -> None:
+    try:
+        nodes = _user_nodes(base_url, admin_token)
+    except Exception as exc:
+        _render(["ONX / Nodes", "", f"Error: {exc}", ""])
+        _pause()
+        return
+
+    lines = [
+        "ONX / Nodes",
+        "",
+    ]
+    if not nodes:
+        lines.extend(["No user-managed nodes found.", ""])
+        _render(lines)
+        _pause()
+        return
+
+    header = f"{'#':<4} {'NAME':<24} {'ROLE':<10} {'STATUS':<12} {'SSH':<24} {'MGMT':<24}"
+    lines.append(header)
+    lines.append("-" * len(header))
+    for index, node in enumerate(nodes, start=1):
+        lines.append(
+            f"{index:<4} "
+            f"{str(node.get('name') or '-'):<24} "
+            f"{str(node.get('role') or '-'):<10} "
+            f"{str(node.get('status') or '-'):<12} "
+            f"{str(node.get('ssh_host') or '-'):<24} "
+            f"{str(node.get('management_address') or '-'):<24}"
+        )
+    lines.append("")
+    _render(lines)
+    _pause()
+
+
+def _pick_user_node(base_url: str, admin_token: str | None, title: str) -> dict | None:
+    try:
+        nodes = _user_nodes(base_url, admin_token)
+    except Exception as exc:
+        _render([title, "", f"Error: {exc}", ""])
+        _pause()
+        return None
+
+    if not nodes:
+        _render([title, "", "No user-managed nodes found.", ""])
+        _pause()
+        return None
+
+    while True:
+        lines = [title, ""]
+        for index, node in enumerate(nodes, start=1):
+            lines.append(
+                f"{index}. {node.get('name')} "
+                f"[role={node.get('role')}, status={node.get('status')}, ssh={node.get('ssh_host')}]"
+            )
+        lines.extend(["", "Select node number or press Enter to cancel.", ""])
+        _render(lines)
+        raw = input("Choice: ").strip()
+        if not raw:
+            return None
+        try:
+            selected_index = int(raw)
+        except ValueError:
+            continue
+        if 1 <= selected_index <= len(nodes):
+            return nodes[selected_index - 1]
+
+
+def _create_node_screen(base_url: str, admin_token: str | None) -> None:
+    _render(
+        [
+            "ONX / Create Node",
+            "",
+            "Interactive node creation will start now.",
+            "",
+        ]
+    )
     try:
         nodes_cli._add_node(_build_nodes_args(base_url=base_url, admin_token=admin_token))
     except Exception as exc:
-        print(f"Ошибка: {exc}")
+        print(f"Error: {exc}")
     print()
     _pause()
 
 
-def _edit_node(base_url: str, admin_token: str | None) -> None:
-    _clear_screen()
-    print("ONX / Edit Node")
-    print()
-    node_ref = input("Имя ноды: ").strip()
-    if not node_ref:
+def _edit_node_screen(base_url: str, admin_token: str | None) -> None:
+    node = _pick_user_node(base_url, admin_token, "ONX / Edit Node")
+    if node is None:
         return
+    _render(
+        [
+            "ONX / Edit Node",
+            "",
+            f"Selected node: {node['name']}",
+            "",
+        ]
+    )
     try:
-        nodes_cli._edit_node(_build_nodes_args(base_url=base_url, admin_token=admin_token, node_ref=node_ref))
+        nodes_cli._edit_node(
+            _build_nodes_args(
+                base_url=base_url,
+                admin_token=admin_token,
+                node_ref=str(node["name"]),
+            )
+        )
     except Exception as exc:
-        print(f"Ошибка: {exc}")
+        print(f"Error: {exc}")
     print()
     _pause()
 
 
-def _delete_node(base_url: str, admin_token: str | None) -> None:
-    _clear_screen()
-    print("ONX / Delete Node")
-    print()
-    node_ref = input("Имя ноды: ").strip()
-    if not node_ref:
+def _delete_node_screen(base_url: str, admin_token: str | None) -> None:
+    node = _pick_user_node(base_url, admin_token, "ONX / Delete Node")
+    if node is None:
         return
+    _render(
+        [
+            "ONX / Delete Node",
+            "",
+            f"Selected node: {node['name']}",
+            "",
+        ]
+    )
     try:
         nodes_cli._delete_node(
             _build_nodes_args(
                 base_url=base_url,
                 admin_token=admin_token,
-                node_ref=node_ref,
+                node_ref=str(node["name"]),
                 yes=False,
             )
         )
     except Exception as exc:
-        print(f"Ошибка: {exc}")
+        print(f"Error: {exc}")
+    print()
+    _pause()
+
+
+def _check_node_availability_screen(base_url: str, admin_token: str | None) -> None:
+    node = _pick_user_node(base_url, admin_token, "ONX / Check Node Availability")
+    if node is None:
+        return
+    _render(
+        [
+            "ONX / Check Node Availability",
+            "",
+            f"Selected node: {node['name']}",
+            "Running discover job...",
+            "",
+        ]
+    )
+    try:
+        nodes_cli._discover(
+            _build_nodes_args(
+                base_url=base_url,
+                admin_token=admin_token,
+                node_ref=str(node["name"]),
+                wait=True,
+            )
+        )
+    except Exception as exc:
+        print(f"Error: {exc}")
     print()
     _pause()
 
 
 def _nodes_menu(base_url: str, admin_token: str | None) -> None:
     while True:
-        _clear_screen()
-        print("ONX / Nodes")
-        print()
-        print("1. Создать ноду")
-        print("2. Вывести список нод")
-        print("3. Редактировать существующую ноду")
-        print("4. Удалить ноду")
-        print("5. Назад")
-        print()
-        choice = input("Выбор: ").strip()
+        _render(
+            [
+                "ONX / Nodes",
+                "",
+                "1. Create node",
+                "2. List nodes",
+                "3. Edit existing node",
+                "4. Delete node",
+                "5. Check node availability",
+                "6. Back",
+                "",
+            ]
+        )
+        choice = input("Choice: ").strip()
         if choice == "1":
-            _create_node(base_url, admin_token)
+            _create_node_screen(base_url, admin_token)
         elif choice == "2":
-            _list_nodes(base_url, admin_token)
+            _list_nodes_screen(base_url, admin_token)
         elif choice == "3":
-            _edit_node(base_url, admin_token)
+            _edit_node_screen(base_url, admin_token)
         elif choice == "4":
-            _delete_node(base_url, admin_token)
+            _delete_node_screen(base_url, admin_token)
         elif choice == "5":
+            _check_node_availability_screen(base_url, admin_token)
+        elif choice == "6":
             return
 
 
 def _restart_daemon(service_name: str) -> None:
-    _clear_screen()
-    print("ONX / Restart Daemon")
-    print()
-    rc = _run_command(["systemctl", "restart", service_name])
-    if rc == 0:
-        print("Демон перезапущен.")
-    else:
-        print(f"Перезапуск завершился с кодом {rc}.")
-    print()
-    _run_command(["systemctl", "status", service_name, "--no-pager"])
-    _pause()
+    _show_command_screen("ONX / Restart Daemon", ["systemctl", "restart", service_name])
 
 
 def _run_smoke(base_url: str, install_dir: Path, client_auth_file: Path, admin_auth_file: Path) -> None:
-    _clear_screen()
-    print("ONX / Smoke Test")
-    print()
-
     client_token = _read_primary_token(client_auth_file)
     admin_token = _read_primary_token(admin_auth_file)
     venv_python = install_dir / ".venv-onx" / "bin" / "python3"
     smoke_script = install_dir / "scripts" / "onx_alpha_smoke.py"
     if not venv_python.exists():
-        print(f"Не найден python venv: {venv_python}")
+        _render(["ONX / Smoke Test", "", f"Missing venv python: {venv_python}", ""])
         _pause()
         return
     if not smoke_script.exists():
-        print(f"Не найден smoke script: {smoke_script}")
+        _render(["ONX / Smoke Test", "", f"Missing smoke script: {smoke_script}", ""])
         _pause()
         return
 
@@ -256,14 +387,7 @@ def _run_smoke(base_url: str, install_dir: Path, client_auth_file: Path, admin_a
         command.extend(["--client-bearer-token", client_token])
     if admin_token:
         command.extend(["--admin-bearer-token", admin_token])
-
-    rc = _run_command(command, cwd=install_dir)
-    print()
-    if rc == 0:
-        print("Smoke-test прошёл.")
-    else:
-        print(f"Smoke-test завершился с кодом {rc}.")
-    _pause()
+    _show_command_screen("ONX / Smoke Test", command)
 
 
 def main() -> int:
@@ -283,30 +407,37 @@ def main() -> int:
     client_auth_file = Path(args.client_auth_file).resolve()
     admin_auth_file = Path(args.admin_auth_file).resolve()
 
-    while True:
-        _clear_screen()
-        print("ONX")
-        print()
-        print(_service_summary(args.service_name))
-        print(_health_summary(base_url))
-        print()
-        print("1. Статус демона")
-        print("2. Работа с нодами")
-        print("3. Перезапустить демон")
-        print("4. Smoke-test")
-        print("5. Выход")
-        print()
-        choice = input("Выбор: ").strip()
-        if choice == "1":
-            _status_screen(base_url, args.service_name)
-        elif choice == "2":
-            _nodes_menu(base_url, admin_token)
-        elif choice == "3":
-            _restart_daemon(args.service_name)
-        elif choice == "4":
-            _run_smoke(base_url, install_dir, client_auth_file, admin_auth_file)
-        elif choice == "5":
-            return 0
+    _enter_alt_screen()
+    try:
+        while True:
+            _render(
+                [
+                    "ONX",
+                    "",
+                    _service_summary(args.service_name),
+                    _health_summary(base_url),
+                    "",
+                    "1. Daemon status",
+                    "2. Node operations",
+                    "3. Restart daemon",
+                    "4. Smoke-test",
+                    "5. Exit",
+                    "",
+                ]
+            )
+            choice = input("Choice: ").strip()
+            if choice == "1":
+                _status_screen(base_url, args.service_name)
+            elif choice == "2":
+                _nodes_menu(base_url, admin_token)
+            elif choice == "3":
+                _restart_daemon(args.service_name)
+            elif choice == "4":
+                _run_smoke(base_url, install_dir, client_auth_file, admin_auth_file)
+            elif choice == "5":
+                return 0
+    finally:
+        _leave_alt_screen()
 
 
 if __name__ == "__main__":
