@@ -190,6 +190,7 @@ Interactive local helper for node onboarding:
 
 ```bash
 python scripts/onx_nodes.py add-node
+python scripts/onx_nodes.py provision-node
 ```
 
 It will prompt for:
@@ -206,13 +207,19 @@ Then it will:
 1. create the node in ONX
 2. store the SSH secret
 
+`provision-node` does the same, then also:
+
+3. runs `discover`
+4. runs `bootstrap-runtime`
+
 Run discovery for an existing node:
 
 ```bash
 python scripts/onx_nodes.py discover <NODE_ID_OR_NAME>
+python scripts/onx_nodes.py bootstrap-runtime <NODE_ID_OR_NAME>
 ```
 
-By default `discover` waits for the job to finish and prints capabilities.
+By default both commands wait for the job to finish and print capabilities.
 
 Useful overrides:
 
@@ -220,6 +227,7 @@ Useful overrides:
 python scripts/onx_nodes.py --base-url http://127.0.0.1:8081/api/v1 add-node
 python scripts/onx_nodes.py --admin-token "<ADMIN_TOKEN>" discover node-msk-1
 python scripts/onx_nodes.py discover node-msk-1 --no-wait
+python scripts/onx_nodes.py bootstrap-runtime node-msk-1 --no-wait
 ```
 
 ## ONX Native Install
