@@ -12,6 +12,10 @@ This document defines the technical shape of `ONX` (`ONyX` as the product name),
 
 This is not end-user documentation. It is the source-of-truth design note for backend, agent, API, routing, and transport orchestration decisions.
 
+Device-bound client delivery is further specified in:
+
+- `ONX_DEVICE_IDENTITY_AND_PROFILE_DELIVERY.md`
+
 ## Product Definition
 
 `ONX` is a control plane and orchestration system for heterogeneous overlay transport networks.

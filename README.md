@@ -55,6 +55,7 @@ Important architecture docs:
 - [ONX_TECHNICAL_DESIGN.md](Q:\MyVeryOwnAwgStS\docs\architecture\ONX_TECHNICAL_DESIGN.md)
 - [ONX_V0_2_BLUEPRINT.md](Q:\MyVeryOwnAwgStS\docs\architecture\ONX_V0_2_BLUEPRINT.md)
 - [ONX_CLIENT_PROTOCOL_V1.md](Q:\MyVeryOwnAwgStS\docs\architecture\ONX_CLIENT_PROTOCOL_V1.md)
+- [ONX_DEVICE_IDENTITY_AND_PROFILE_DELIVERY.md](Q:\MyVeryOwnAwgStS\docs\architecture\ONX_DEVICE_IDENTITY_AND_PROFILE_DELIVERY.md)
 - [ONX_MIGRATIONS.md](Q:\MyVeryOwnAwgStS\docs\architecture\ONX_MIGRATIONS.md)
 - [ALPHA_ACCEPTANCE_CHECKLIST.md](Q:\MyVeryOwnAwgStS\docs\architecture\ALPHA_ACCEPTANCE_CHECKLIST.md)
 - [ADR-0004-control-plane-ha.md](Q:\MyVeryOwnAwgStS\docs\architecture\ADR-0004-control-plane-ha.md)
